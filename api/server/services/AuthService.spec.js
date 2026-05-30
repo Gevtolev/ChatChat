@@ -1,5 +1,6 @@
 jest.mock('@librechat/data-schemas', () => ({
   logger: { info: jest.fn(), warn: jest.fn(), debug: jest.fn(), error: jest.fn() },
+  getTenantId: jest.fn(() => undefined),
   DEFAULT_SESSION_EXPIRY: 900000,
   DEFAULT_REFRESH_TOKEN_EXPIRY: 604800000,
 }));
@@ -42,7 +43,12 @@ jest.mock('~/models', () => ({
   deleteUserById: jest.fn(),
   generateRefreshToken: jest.fn(),
 }));
-jest.mock('~/strategies/validators', () => ({ registerSchema: { parse: jest.fn() } }));
+jest.mock('~/strategies/validators', () => ({
+  registerSchema: { parse: jest.fn(), safeParse: jest.fn(() => ({ error: null })) },
+}));
+jest.mock('~/server/services/anonymousAccount', () => ({
+  getPriorAnonymousUserId: jest.fn(async () => null),
+}));
 jest.mock('~/server/services/Config', () => ({ getAppConfig: jest.fn() }));
 jest.mock('~/server/utils', () => ({ sendEmail: jest.fn() }));
 
@@ -55,9 +61,10 @@ const {
   parseCloudFrontCookieScope,
 } = require('@librechat/api');
 const jwt = require('jsonwebtoken');
-const { logger } = require('@librechat/data-schemas');
+const { logger, getTenantId } = require('@librechat/data-schemas');
 const {
   findUser,
+  countUsers,
   getUserById,
   generateToken,
   generateRefreshToken,
@@ -65,6 +72,7 @@ const {
 } = require('~/models');
 const { getAppConfig } = require('~/server/services/Config');
 const {
+  registerUser,
   setOpenIDAuthTokens,
   requestPasswordReset,
   setAuthTokens,
@@ -814,5 +822,64 @@ describe('CloudFront cookie integration', () => {
 
       expect(result).toBe('mock-access-token');
     });
+  });
+});
+
+describe('registerUser - allowedDomains admin-panel override', () => {
+  const validUser = {
+    email: 'new-user@example.com',
+    password: 'a-secure-password',
+    name: 'New User',
+    username: 'new-user',
+  };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    getTenantId.mockReturnValue(undefined);
+    isEmailDomainAllowed.mockReturnValue(true);
+    getAppConfig.mockResolvedValue({
+      registration: { allowedDomains: ['example.com'] },
+      balance: undefined,
+    });
+    findUser.mockResolvedValue(null);
+    countUsers.mockResolvedValue(0);
+  });
+
+  it('should resolve the full app config so admin-panel overrides on the __base__ principal apply', async () => {
+    // Regression guard for getAppConfig({ baseOnly: true }): that option short-circuits
+    // before the DB override merge, which silently ignores any admin-panel edits to
+    // registration.allowedDomains (the admin panel writes overrides to the __base__
+    // principal in the configs collection). registerUser must request the merged config
+    // so the global __base__ override is honored, same as it is for SSO callbacks via
+    // checkDomainAllowed.
+    await registerUser(validUser);
+
+    expect(getAppConfig).toHaveBeenCalledTimes(1);
+    expect(getAppConfig).toHaveBeenCalledWith({});
+    expect(getAppConfig).not.toHaveBeenCalledWith(expect.objectContaining({ baseOnly: true }));
+  });
+
+  it('should pass tenantId from ALS so the merged-config cache key matches tenant-scoped DB queries', async () => {
+    // /api/auth runs through preAuthTenantMiddleware, which puts a tenantId into
+    // AsyncLocalStorage. Mongoose queries inside getApplicableConfigs are scoped by ALS,
+    // but the per-principal merged-config cache key uses the explicit tenantId param.
+    // If we don't forward the ALS tenantId, tenant A's request caches at `__default__`
+    // and a later tenant B request can hit that entry — leaking config across tenants.
+    getTenantId.mockReturnValue('tenant-x');
+
+    await registerUser(validUser);
+
+    expect(getAppConfig).toHaveBeenCalledWith({ tenantId: 'tenant-x' });
+  });
+
+  it('should block registration when the resolved allowedDomains rejects the email', async () => {
+    isEmailDomainAllowed.mockReturnValue(false);
+
+    const result = await registerUser({ ...validUser, email: 'blocked@evil.com' });
+
+    expect(result.status).toBe(403);
+    expect(result.message).toMatch(/cannot be used/i);
+    // Domain check must happen before any DB user lookup.
+    expect(findUser).not.toHaveBeenCalled();
   });
 });
