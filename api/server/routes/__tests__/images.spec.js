@@ -12,6 +12,7 @@ const { fileSchema, createMethods } = require('@librechat/data-schemas');
 const actualApi = jest.requireActual('@librechat/api');
 const mockSubmitGeneration = jest.fn((...args) => actualApi.submitGeneration(...args));
 const mockResolveResult = jest.fn((...args) => actualApi.resolveResult(...args));
+const mockRefreshS3Url = jest.fn((...args) => actualApi.refreshS3Url(...args));
 
 jest.mock('@librechat/api', () => {
   const real = jest.requireActual('@librechat/api');
@@ -19,6 +20,7 @@ jest.mock('@librechat/api', () => {
     ...real,
     submitGeneration: (...args) => mockSubmitGeneration(...args),
     resolveResult: (...args) => mockResolveResult(...args),
+    refreshS3Url: (...args) => mockRefreshS3Url(...args),
   };
 });
 
@@ -122,6 +124,7 @@ beforeEach(async () => {
   jest.clearAllMocks();
   mockSubmitGeneration.mockImplementation((...args) => actualApi.submitGeneration(...args));
   mockResolveResult.mockImplementation((...args) => actualApi.resolveResult(...args));
+  mockRefreshS3Url.mockImplementation((...args) => actualApi.refreshS3Url(...args));
   mockGetAppConfig.mockImplementation(async () => ({
     fileStrategy: 'local',
     imageGeneration: TEST_IMAGE_GENERATION_CONFIG,
@@ -502,5 +505,67 @@ describe('GET /api/images/ — DB-level pagination with _id cursor (I-1/I-2)', (
     for (const f of res.body.images) {
       expect(f.context).toBe('image_generation');
     }
+  });
+});
+
+describe('GET /api/images/ — refreshes S3 signed URLs on read', () => {
+  it('replaces each returned filepath with a freshly signed URL', async () => {
+    const { app, user } = createApp();
+    await File.insertMany([
+      {
+        file_id: 's3-1',
+        user: user.id,
+        context: 'image_generation',
+        filename: 's3-1.png',
+        filepath: 'https://r2.example.com/images/s3-1.png?X-Amz-Expires=120',
+        object: 'file',
+        type: 'image/png',
+        bytes: 1,
+        source: 's3',
+        storageKey: 'images/user/s3-1.png',
+      },
+      {
+        file_id: 's3-2',
+        user: user.id,
+        context: 'image_generation',
+        filename: 's3-2.png',
+        filepath: 'https://r2.example.com/images/s3-2.png?X-Amz-Expires=120',
+        object: 'file',
+        type: 'image/png',
+        bytes: 1,
+        source: 's3',
+        storageKey: 'images/user/s3-2.png',
+      },
+    ]);
+    mockRefreshS3Url.mockImplementation(async (file) => `${file.filepath}&signed=fresh`);
+
+    const res = await request(app).get('/api/images/');
+
+    expect(res.status).toBe(200);
+    expect(res.body.images).toHaveLength(2);
+    expect(mockRefreshS3Url).toHaveBeenCalledTimes(2);
+    for (const f of res.body.images) {
+      expect(f.filepath).toMatch(/&signed=fresh$/);
+    }
+  });
+
+  it('leaves non-s3 (local) filepaths unchanged', async () => {
+    const { app, user } = createApp();
+    await File.create({
+      file_id: 'local-1',
+      user: user.id,
+      context: 'image_generation',
+      filename: 'local-1.png',
+      filepath: '/images/user/local-1.png',
+      object: 'file',
+      type: 'image/png',
+      bytes: 1,
+      source: 'local',
+    });
+
+    const res = await request(app).get('/api/images/');
+
+    expect(res.status).toBe(200);
+    expect(res.body.images[0].filepath).toBe('/images/user/local-1.png');
   });
 });
