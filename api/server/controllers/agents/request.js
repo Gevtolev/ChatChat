@@ -137,7 +137,7 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
 
     // Send JSON response IMMEDIATELY so client can connect to SSE stream
     // This is critical: tool loading (MCP OAuth) may emit events that the client needs to receive
-    res.json({ streamId, conversationId, status: 'started' });
+    res.json({ streamId, conversationId, generationCreatedAt: jobCreatedAt, status: 'started' });
 
     await attachConversationCreatedAt(req, { userId, conversationId, isNewConvo });
 
