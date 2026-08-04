@@ -2,14 +2,23 @@
 
 基线 commit: 5e72ef4c88d8c78a376c970f7502caa88a1cf306
 上游目标: upstream/dev @ b80729299
+合并后 commit: af91ed004（Task 10 回归时的 HEAD，相对基线共 22 个提交）
 
-| workspace | 合并前 |
-|---|---|
-| api | Tests: 2395 passed, 11 failed, 1 skipped, 2407 total |
-| packages/api | Tests: 5594 passed, 3 failed, 43 skipped, 5640 total |
-| packages/data-schemas | Tests: 1554 passed, 0 failed, 1554 total |
-| packages/data-provider | Tests: 1124 passed, 0 failed, 1 skipped, 1125 total |
-| client | Tests: 2387 passed, 18 failed, 2405 total |
+| workspace | 合并前 | 合并后 |
+|---|---|---|
+| api | Tests: 2395 passed, 11 failed, 1 skipped, 2407 total | Tests: 2421 passed, 11 failed, 1 skipped, 2433 total |
+| packages/api | Tests: 5594 passed, 3 failed, 43 skipped, 5640 total | Tests: 6470 passed, 3 failed, 51 skipped, 6524 total |
+| packages/data-schemas | Tests: 1554 passed, 0 failed, 1554 total | Tests: 1554 passed, 0 failed, 1554 total |
+| packages/data-provider | Tests: 1124 passed, 0 failed, 1 skipped, 1125 total | Tests: 1135 passed, 0 failed, 1 skipped, 1136 total |
+| client | Tests: 2387 passed, 18 failed, 2405 total | Tests: 2847 passed, 18 failed, 2865 total |
+
+**逐条对比结论：**
+
+- **api**：失败集合与合并前完全一致（仍是同一批 `responses.spec.js` 里的 11 个 Open Responses 集成测试）。总数从 2407 → 2433（+26 passed），来自本次为 steer 功能新增的测试（`api/server/controllers/agents/__tests__/steer.spec.js`、`client.steerWiring.spec.js`、`request.steerTerminalRecovery.spec.js`）。首次全量跑时曾出现 15 failed（多出的 4 个来自 `server/services/Config/loadAsyncEndpoints.spec.js`，报 `PrincipalType.USER` undefined），原因是该次运行与 `npm run build` 并行争抢了机器资源；单独隔离重跑该文件 4/4 全绿，随后单独重跑整个 `api` workspace（不与其他任务并行）稳定复现 11 failed，与基准一致，判定为已知的并发 flake，不计入回归。
+- **packages/api**：失败集合与合并前完全一致（`models.spec.ts` 的默认 Anthropic 模型列表断言过期、`summarization.e2e.test.ts` 的 2 个 `--experimental-vm-modules` 相关用例），外加同样的 3 个 Redis 集成测试套件进程级崩溃（本机无 Redis 服务）。总数从 5640 → 6524（+884 total，其中 651 来自本次为 `packages/api/src/stream/` 与 `packages/api/src/agents/steering/` 新增的测试文件），skipped 从 43 → 51（新测试里新增的 skip 用例）。
+- **packages/data-schemas**：合并前后完全一致，1554/1554 全绿，无回归。
+- **packages/data-provider**：0 failed，总数从 1125 → 1136（+11 passed），来自本次新增的 steer 相关类型/工具函数测试。无回归。
+- **client**：失败集合与合并前完全一致（`ImageGallery.spec.tsx` + `ImageWorkspace.spec.tsx` 共 18 个用例，均因 `useGetStartupConfig is not a function` 的过期 mock，与本次 steer 功能无关）。总数从 2405 → 2865（+460 total），来自 SSE hooks 全量对齐产生的新增/扩写测试（`useResumableSSE.spec.ts`、`useStepHandler.spec.ts`、`useResumeOnLoad.spec.tsx` 等）以及 steer UI 组件测试（`DuringRunSendButton.test.tsx`、`InFlightSteers.test.tsx`、`PendingSteerChips.test.tsx`）。`UploadSkillDialog.spec.tsx` 已知并发 flake本轮未触发（未出现在失败列表中）。
 
 合并前已存在的失败用例（这些不算回归）：
 
@@ -58,3 +67,13 @@
 ## 构建验证
 
 `npm run build`（从仓库根执行）：构建成功，Turborepo 报告 `Tasks: 5 successful, 5 total`，耗时 1m34.093s，退出码 0，无 TypeScript 报错（唯一的 "error" 命中是 `react-virtualized` 的 Rollup 打包警告 "Module level directives cause errors when bundled"，不是构建失败）。
+
+## Task 10 合并后验证（af91ed004）
+
+**构建**：`npm run build`（仓库根）：Turborepo 报告 `Tasks: 5 successful, 5 total`（全部 6 个子包中 5 个纳入 build pipeline，逐一 cache hit），无 `error TS` 命中，构建通过。
+
+**类型检查**：
+- `packages/api`：`npx tsc --noEmit -p tsconfig.json` 退出码 0，零报错。
+- `client`：`npx tsc --noEmit` 报错行数与合并前基准（`docs/superpowers/plans/client-ts-baseline.txt`）逐条 diff，结果为**零新增**，且减少 2 条（`src/hooks/SSE/__tests__/useAttachmentHandler.spec.tsx` 里两条 `Type 'null' is not assignable to type 'string | undefined'` 在本次 SSE hooks 对齐中被顺带修掉）。`client` 的 `npm run build` 仅是 `vite build`，不做类型检查，故以此 `tsc --noEmit` diff 作为类型证据。
+
+**Lint**：`npx eslint client/src/hooks/SSE client/src/components/Chat/Input client/src/store api/server/controllers/agents packages/api/src/stream packages/api/src/agents/steering` 命中 `8 errors, 3 warnings`，但经与本分支 `git diff 5e72ef4c8..af91ed004 --stat` 逐文件核对，全部命中集中在 3 个本分支**完全未触碰**的文件：`client/src/components/Chat/Input/ActiveSetting.tsx`、`CircleRender.tsx`、`Files/Table/TemplateTable.tsx`（`i18next/no-literal-string` 硬编码字符串 + `no-nested-ternary`，均是 pre-existing、早于本次 fork 就存在于 `main` 的示例/模板组件）。本分支实际改动或新增的所有文件（`ChatForm.tsx`、`DuringRunSendButton.tsx`、`InFlightSteers.tsx`、`PendingSteerChips.tsx`、`SteerMenu.tsx`、`useResumableSSE.ts`、`GenerationJobManager.ts` 等 87 个文件）lint 零 error 零 warning。
