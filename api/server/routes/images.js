@@ -12,6 +12,7 @@ const {
   getDefaultImageModel,
   getAspectRatios,
   getStorageMetadata,
+  refreshS3Url,
 } = require('@librechat/api');
 const { getStrategyFunctions } = require('~/server/services/Files/strategies');
 const { getFileStrategy } = require('~/server/utils/getFileStrategy');
@@ -171,7 +172,10 @@ router.get('/', async (req, res) => {
     results.pop();
     nextCursor = results[results.length - 1]._id;
   }
-  res.json({ images: results, nextCursor });
+  const images = await Promise.all(
+    results.map(async (file) => ({ ...file, filepath: await refreshS3Url(file) })),
+  );
+  res.json({ images, nextCursor });
 });
 
 router.buildDeps = buildDeps;
