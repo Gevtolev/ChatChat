@@ -17,7 +17,17 @@
 - `@librechat/agents` 必须升到 `^3.3.11`。Steering 需要 SDK 的 `injectedMessages`（agents#299），Preemptive 需要 preempt seam（agents#335、#346）。**3.2.62 不支持**，`isSteeringSupported()` 会返回 false。
 - 所有测试命令必须带本机环境前缀：`LD_LIBRARY_PATH="$HOME/.local/ssl1.1/usr/lib/x86_64-linux-gnu" MONGOMS_VERSION=4.4.18`。
 - 从仓库根跑 jest 会因残留 worktree 触发 haste 冲突，**必须 `cd` 到对应 workspace 目录再跑**。
-- 禁止 `any`；限制 `unknown`。所有 TypeScript / ESLint 报错必须清零。
+- 禁止 `any`；限制 `unknown`。
+- **类型检查的验收标准分两套**（2026-08-05 修订，原「所有 TS/ESLint 报错必须清零」在 client 上从未成立）：
+  - `packages/*` 与 `api/`：`npm run build` 必须零 `error TS`，`packages/api` 的 `npx tsc --noEmit` 必须退出码 0。
+  - `client/`：**`npm run build` 走的是纯 `vite build`，不做类型检查**，所以「build 成功」不能作为 client 的类型证据。client 的实际状态是 159 条既有类型错误（涉及 76 个文件），已固化为 `docs/superpowers/plans/client-ts-baseline.txt`。任何触及 client 的 Task，结束时必须跑：
+
+    ```bash
+    cd client && npx tsc --noEmit -p tsconfig.json 2>&1 | grep "error TS" | sed -E 's/\(([0-9]+),([0-9]+)\)//' | sort > /tmp/client-ts-now.txt
+    diff docs/superpowers/plans/client-ts-baseline.txt /tmp/client-ts-now.txt
+    ```
+
+    验收标准是 **`diff` 无新增行**（`>` 开头的行为零）。减少是允许的。基准去掉了行号，所以插入代码导致的行号漂移不会产生假阳性。
 - 用户可见文本一律走 `useLocalize()`，只改 `client/src/locales/en/translation.json`。
 - 每个 Task 结束必须提交一次，commit message 用英文，**禁止 Co-Authored-By 签名**。
 
