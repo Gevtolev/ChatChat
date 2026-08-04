@@ -83,7 +83,8 @@ export const isDocumentSupportedProvider = (provider?: string | null): boolean =
   return documentSupportedProviders.has(provider ?? '');
 };
 
-const cacheSubsetProviders = new Set<string>([
+export const cacheSubsetProviders = new Set<string>([
+  Providers.OPENAI,
   Providers.AZURE,
   Providers.GOOGLE,
   Providers.VERTEXAI,
