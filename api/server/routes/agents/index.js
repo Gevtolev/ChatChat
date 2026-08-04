@@ -214,7 +214,7 @@ router.get('/chat/status/:conversationId', async (req, res) => {
   const isActive = job.status === 'running';
 
   let unrecoveredSteers;
-  if (!isActive) {
+  if (!isActive || job.metadata.steersClosed === true) {
     const claimed = await GenerationJobManager.steering.claimDetailed(conversationId, {
       userId: req.user.id,
       tenantId: req.user.tenantId,
