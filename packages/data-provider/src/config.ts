@@ -399,6 +399,23 @@ export const baseEndpointSchema = z.object({
     .optional(),
   titleEndpoint: z.string().optional(),
   titlePromptTemplate: z.string().optional(),
+  /**
+   * Agent activity groups: collapse each contiguous block of reasoning and
+   * tool calls under a generated one-line header. Mirrors the title options
+   * above — `activityLabel` enables it (like `titleConvo`), the rest tune
+   * the fast model that writes the label.
+   */
+  activityLabel: z.boolean().optional(),
+  /** Model used to write activity labels. Defaults to `titleModel`, then the agent's model. */
+  activityModel: z.string().optional(),
+  /** Endpoint whose credentials the label model runs on. Defaults to the agent's endpoint. */
+  activityEndpoint: z.string().optional(),
+  /** Overrides the system prompt used to write activity labels. */
+  activityPrompt: z.string().optional(),
+  /** Cost cap: maximum labels generated per run. Default 20. */
+  activityMaxPerRun: z.number().int().positive().optional(),
+  /** Per-entry truncation of tool input/output in the label prompt. Default 600. */
+  activityCharLimit: z.number().int().positive().optional(),
   /** Maximum characters allowed in a single tool result before truncation. */
   maxToolResultChars: z.number().positive().optional(),
 });
@@ -587,6 +604,124 @@ const remoteApiAuthSchema = z.object({
 const remoteApiSchema = z.object({
   auth: remoteApiAuthSchema.optional(),
 });
+
+/**
+ * Permission mode applied to a tool call. Mirrors `@librechat/agents`'s
+ * `ToolPolicyMode` 1:1.
+ *
+ * - `default`: ask the user about anything not explicitly allowed (default-on).
+ * - `dontAsk`: deny anything not explicitly allowed (headless / API-key flows).
+ * - `bypass`: auto-approve everything that isn't explicitly denied
+ *   (the user-facing "stop asking me" toggle).
+ *
+ * Subagents inherit the parent's mode; this is enforced by the SDK and not
+ * overridable per-subagent.
+ */
+export const toolApprovalModeSchema = z.enum(['default', 'dontAsk', 'bypass']);
+export type ToolApprovalMode = z.infer<typeof toolApprovalModeSchema>;
+
+/**
+ * A programmatic tool-approval hook loaded from a module at startup.
+ *
+ * The referenced module's default export must be a builder
+ * `(options?) => ToolApprovalHookFactory` (see `@librechat/api`'s `registerToolApprovalHook`).
+ * Hooks compose with the static `allow`/`deny`/`ask` policy above and can only TIGHTEN it
+ * (the SDK folds decisions `deny → ask → allow`). This is admin-level config — the module is
+ * dynamically imported and executed in-process, so only reference trusted code.
+ */
+export const toolApprovalHookConfigSchema = z.object({
+  /**
+   * Module specifier to import: a bare package name (e.g. `@acme/approval-hooks`) or a path —
+   * absolute, or relative to the app root. Its default export is the hook builder.
+   */
+  module: z.string().min(1),
+  /** Optional regex matched against the tool name; omit to run for every tool. */
+  matcher: z.string().optional(),
+  /** Static options forwarded to the module's builder; the hook's own per-call config. */
+  options: z.record(z.unknown()).optional(),
+});
+
+export type TToolApprovalHookConfig = z.infer<typeof toolApprovalHookConfigSchema>;
+
+/**
+ * Per-endpoint tool-approval policy.
+ *
+ * Shape mirrors `@librechat/agents`'s `ToolPolicyConfig` so the host can map it
+ * directly into `createToolPolicyHook(config)`. The SDK does the evaluation
+ * (`deny → bypass → allow → ask → dontAsk → fallthrough(ask)`); this config
+ * just describes the surface.
+ *
+ * Conventions:
+ * - All list entries are matched as globs (`*`). Use `mcp:server:*` to scope
+ *   a rule to every tool from a single MCP server.
+ * - `deny` always wins, including under `bypass`.
+ * - `enabled: false` is a LibreChat-only kill switch that disables the entire
+ *   HITL machinery for this endpoint (no checkpointer, no hooks, no prompts).
+ *   This is admin-level; users toggle prompting via `mode: 'bypass'` instead.
+ */
+export const toolApprovalPolicySchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    mode: toolApprovalModeSchema.optional(),
+    allow: z.array(z.string()).optional(),
+    deny: z.array(z.string()).optional(),
+    ask: z.array(z.string()).optional(),
+    /** Optional reason template surfaced in the prompt; `{tool}` is interpolated. */
+    reason: z.string().optional(),
+    /**
+     * Programmatic policy hooks loaded from modules at startup. They layer on top of the
+     * static lists above for dynamic, context-aware decisions the lists can't express
+     * (per-args, per-agent, per-user). See {@link toolApprovalHookConfigSchema}.
+     *
+     * BASE-CONFIG ONLY: hooks are imported + registered once, process-wide, at server
+     * startup — they are NOT reloaded from per-role/user/tenant admin overrides. Encode
+     * per-user/tenant behavior INSIDE the hook (via its runtime context), not by varying the
+     * module list per override. Honored only when `enabled` is true.
+     */
+    hooks: z.array(toolApprovalHookConfigSchema).optional(),
+  })
+  .optional();
+
+export type TToolApprovalPolicy = z.infer<typeof toolApprovalPolicySchema>;
+
+/**
+ * Durable checkpointer backing human-in-the-loop resume.
+ *
+ * When `toolApproval.enabled` is true, a run that pauses for review suspends its
+ * LangGraph state to a checkpoint; resuming rebuilds that state on a *fresh* `Run`
+ * — possibly on a different replica, or the same worker after a restart. That only
+ * works if the checkpoint outlives the original request, so HITL needs a durable
+ * saver, not the SDK's process-local `MemorySaver` fallback.
+ *
+ * Defaults are zero-config: with `toolApproval.enabled` on and no `checkpointer`
+ * block, LibreChat persists checkpoints to its primary MongoDB, so resume works
+ * across replicas out of the box.
+ *
+ * - `type: 'mongo'` (default) — persist to the app database; survives restarts and
+ *   resolves on any replica. A TTL index reclaims runs that are never resolved.
+ * - `type: 'memory'` — process-local only. Paused runs do NOT survive a restart and
+ *   can only be resolved on the originating worker. Single-process / dev only.
+ */
+export const checkpointerTypeSchema = z.enum(['mongo', 'memory']);
+export type TCheckpointerType = z.infer<typeof checkpointerTypeSchema>;
+
+export const checkpointerSchema = z
+  .object({
+    type: checkpointerTypeSchema.optional(),
+    /**
+     * Approval window, in seconds: how long a paused run waits for a decision
+     * before it is reclaimed. Drives both the Mongo TTL index on checkpoints and
+     * the pending-action expiry, keeping the two layers in lockstep. Defaults to
+     * 86400 (24h). Raise it for longer review windows.
+     */
+    ttl: z.number().int().positive().optional(),
+    /** Advanced: override the Mongo collection names used for checkpoints. */
+    checkpointCollectionName: z.string().optional(),
+    checkpointWritesCollectionName: z.string().optional(),
+  })
+  .optional();
+
+export type TCheckpointerConfig = z.infer<typeof checkpointerSchema>;
 
 export const agentsEndpointSchema = baseEndpointSchema
   .omit({ baseURL: true })
@@ -1919,6 +2054,10 @@ export enum CacheKeys {
    * key for open id exchanged tokens
    */
   OPENID_EXCHANGED_TOKENS = 'OPENID_EXCHANGED_TOKENS',
+  /**
+   * Key for cached authenticated user documents.
+   */
+  AUTH_USER_DOC = 'AUTH_USER_DOC',
   /**
    * Key for OpenID session.
    */

@@ -83,6 +83,21 @@ export const isDocumentSupportedProvider = (provider?: string | null): boolean =
   return documentSupportedProviders.has(provider ?? '');
 };
 
+const cacheSubsetProviders = new Set<string>([
+  Providers.AZURE,
+  Providers.GOOGLE,
+  Providers.VERTEXAI,
+  Providers.XAI,
+  Providers.DEEPSEEK,
+  Providers.OPENROUTER,
+  Providers.MOONSHOT,
+  Providers.ANTHROPIC,
+]);
+
+export const inputTokensIncludesCache = (provider?: string | null): boolean => {
+  return cacheSubsetProviders.has(provider ?? '');
+};
+
 export const paramEndpoints = new Set<EModelEndpoint | string>([
   EModelEndpoint.agents,
   EModelEndpoint.openAI,
