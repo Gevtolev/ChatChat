@@ -648,7 +648,15 @@ git commit -m "feat(steer): add in-flight steer UI components and composer bindi
 
 ---
 
-## Task 9: 设置项、快捷键与本地化
+## Task 9: 设置项、快捷键挂载与本地化
+
+> **2026-08-05 范围调整**：`client/src/utils/shortcuts.ts` 与 `client/src/hooks/useKeyboardShortcuts.ts` **已在 Task 8 提前搬入**（`useTextarea.ts` 的编译依赖，两文件与上游逐字节一致，各自的上游 spec 也已跑过：`shortcuts.spec.ts` 53/53、`useKeyboardShortcuts.spec.tsx` 29/29）。本 Task 的实际剩余范围是三件事：
+>
+> 1. **挂载全局快捷键框架** —— `useKeyboardShortcuts` 的默认导出（全局 keydown 监听）目前**从未被挂载**，整套框架处于 inert 状态。挂载时注意：它会一并启用 `newChat` / `toggleSidebar` / `focusSearch` 等一批与 steer 无关的快捷键，需确认这些不与本 fork 既有交互冲突。
+> 2. **设置项注册** —— `client/src/store/settings.ts` 的两个 steer 相关 atom 已在 Task 8 随 `store/misc.ts` 合并时处理，本 Task 负责把设置项接进 `client/src/components/Nav/Settings/registry.tsx`。
+> 3. **补全 30 个缺失的 `com_shortcut_*` key**（Task 8 审查 M-1）—— 如 `com_shortcut_submit_message` / `com_shortcut_group_chat` 等。它们目前不可见（只被未挂载的快捷键设置弹窗消费），但**一旦第 1 项挂载就会立刻暴露为缺失文案**。
+>
+> **必办复查项**：挂载完成后回头看 Task 8 遗留的 I-4 —— `SteerMenu.tsx:249` 的 `aria-keyshortcuts` 会向读屏用户播报 `Control+Shift+.`（escalateSteer），在框架未挂载时那是个按了没反应的假承诺。挂载后该播报即成真实，与上游自带 `PendingSteerChips.test.tsx` 中"hover 激活时播报快捷键"断言的冲突自然消失。**若本 Task 最终决定不挂载全局框架，必须回头单独处理 I-4，且禁止为此新建自研的「是否已挂载」信号。**
 
 **Files:**
 - Modify: `client/src/store/settings.ts`（steer 默认行为设置）
