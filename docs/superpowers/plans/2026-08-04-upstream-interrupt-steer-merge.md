@@ -247,16 +247,21 @@ git commit -m "chore(deps): upgrade @librechat/agents to ^3.3.11 for steering su
 
 ---
 
-## Task 3: 后端 stream 子系统整体对齐
+## Task 3: 后端 stream 子系统对齐 + steering 模块
+
+> **2026-08-04 裁定**：原 Task 3 与 Task 4 合并为本 Task。原因是原 Task 3 结束时 `stream/` 会引用尚未补齐的 steering 模块，必然留下类型错误，与 Global Constraints「所有 TypeScript / ESLint 报错必须清零」冲突。合并后**本 Task 结束时类型必须全绿**，不存在中间态。后续 Task 编号不变（Task 4 已并入本 Task）。
 
 **Files:**
 - Overwrite: `packages/api/src/stream/GenerationJobManager.ts`、`createStreamServices.ts`、`index.ts`、`interfaces/IJobStore.ts`、`implementations/{InMemoryEventTransport,InMemoryJobStore,RedisEventTransport,RedisJobStore}.ts`
 - Create: `packages/api/src/stream/{ApprovalLifecycle,SteerRecovery,SteeringLifecycle,abortContent,jobStoreCapabilities,metadata}.ts`、`packages/api/src/stream/internal/chunkPublication.ts`、`packages/api/src/stream/implementations/index.ts`、`packages/api/src/stream/interfaces/index.ts`
 - Overwrite: `packages/api/src/stream/` 下全部 `__tests__` 与 `*.spec.ts`
+- Create: `packages/api/src/agents/steering/{index,media,offset,refs,request,runtime}.ts` + 对应 spec
+- Create: `api/server/controllers/agents/protocol.js`
+- Modify: `packages/api/src/index.ts`（只补 steering 相关导出行）
 
 **Interfaces:**
 - Consumes: Task 2 的 SDK ^3.3.11
-- Produces: `GenerationJobManager`（含 `requestPreempt` / `isPreemptRequested` / `noteSteersRemoved` / `clearPreemptRequests`）、`IEventTransport` 的 `emitPreempt` / `onPreempt`、`SteeringLifecycle`、`SteerRecovery`。Task 4、5 依赖这些导出。
+- Produces: `GenerationJobManager`（含 `requestPreempt` / `isPreemptRequested` / `noteSteersRemoved` / `clearPreemptRequests`）、`IEventTransport` 的 `emitPreempt` / `onPreempt`、`SteeringLifecycle`、`SteerRecovery`；`handleSteerRequest` / `handleSteerCancel` / `handleSteerArm`（从 `@librechat/api` 导出）；`getRequestedGenerationProtocol` / `getServerGenerationProtocol` / `GENERATION_PROTOCOL_HEADER`（来自 `protocol.js`）。Task 5 的 `steer.js` 直接消费这些。
 
 - [ ] **Step 1: 再次确认我们对该目录零自定义（安全整体覆盖的前提）**
 
@@ -273,41 +278,14 @@ git checkout upstream/dev -- packages/api/src/stream/
 git status --short packages/api/src/stream/ | head -40
 ```
 
-- [ ] **Step 3: 检查该目录对外部模块的新增依赖是否都存在**
+- [ ] **Step 3: 记录该目录对外部模块的依赖，确认缺失项**
 
 ```bash
 grep -rhoE "from '[~@][^']*'" packages/api/src/stream/ | sort -u
 ```
-逐个确认这些路径在我们仓库里存在。若有缺失（例如指向 `~/agents/steering/*`），记下来，它们由 Task 4 补齐 —— 本 Task 允许暂时的类型报错，但**必须在 Task 4 结束时清零**。
+逐个确认这些路径在我们仓库里存在。把缺失的记进报告（预期会有指向 `~/agents/steering/*` 的），它们由本 Task 的 Step 4 补齐。**本 Task 结束时不允许残留任何类型错误。**
 
-- [ ] **Step 4: 跑 stream 子系统测试**
-
-```bash
-cd /data/lidongyu/projects/LibreChat/packages/api && LD_LIBRARY_PATH="$HOME/.local/ssl1.1/usr/lib/x86_64-linux-gnu" MONGOMS_VERSION=4.4.18 npx jest src/stream 2>&1 | tail -40
-```
-Expected: 若 Step 3 无缺失依赖则全绿；若有缺失，仅允许「模块找不到」类失败，且必须与 Step 3 记录的清单一一对应。
-
-- [ ] **Step 5: 提交**
-
-```bash
-git add packages/api/src/stream/
-git commit -m "chore(stream): align stream subsystem with upstream dev baseline"
-```
-
----
-
-## Task 4: 后端 steering 模块与 protocol
-
-**Files:**
-- Create: `packages/api/src/agents/steering/{index,media,offset,refs,request,runtime}.ts` + 对应 spec
-- Create: `api/server/controllers/agents/protocol.js`
-- Modify: `packages/api/src/index.ts`（导出 steering 公共 API）
-
-**Interfaces:**
-- Consumes: Task 3 的 `GenerationJobManager`、`SteeringLifecycle`
-- Produces: `handleSteerRequest`、`handleSteerCancel`、`handleSteerArm`（从 `@librechat/api` 导出，Task 5 的 `steer.js` 直接消费）；`getRequestedGenerationProtocol`、`getServerGenerationProtocol`、`GENERATION_PROTOCOL_HEADER`（来自 `protocol.js`）
-
-- [ ] **Step 1: 取上游 steering 模块与 protocol**
+- [ ] **Step 4: 取上游 steering 模块与 protocol**
 
 ```bash
 cd /data/lidongyu/projects/LibreChat
@@ -316,33 +294,39 @@ git checkout upstream/dev -- api/server/controllers/agents/protocol.js
 ls packages/api/src/agents/steering/
 ```
 
-- [ ] **Step 2: 对比 packages/api 的导出入口，只补 steering 相关行**
+- [ ] **Step 5: 对比 packages/api 的导出入口，只补 steering 相关行**
 
 ```bash
 git diff main:packages/api/src/index.ts upstream/dev:packages/api/src/index.ts | grep -iE '^\+.*(steer|preempt|protocol)'
 ```
-把匹配到的 `export` 行手工加进 `packages/api/src/index.ts`。**不要**整体覆盖该文件 —— 它包含我们自己的导出（`ingestFile` 之类历史项除外，billing / images 等都在里面）。
+把匹配到的 `export` 行手工加进 `packages/api/src/index.ts`。**不要**整体覆盖该文件 —— 它包含我们自己的 billing / images 等导出。
 
-- [ ] **Step 3: 类型检查，清掉 Task 3 遗留的缺失依赖**
+- [ ] **Step 6: 类型检查必须全绿**
 
 ```bash
 cd /data/lidongyu/projects/LibreChat && npm run build 2>&1 | grep -E "error TS" | head -30
 ```
-Expected: 与 steering / stream 相关的 TS 错误全部消失。若仍有，逐个定位缺失文件并从上游补齐。
+Expected: **零输出**。若仍有 TS 错误，逐个定位缺失文件并从上游补齐，不得遗留。
 
-- [ ] **Step 4: 跑 steering 与 stream 测试**
-
-```bash
-cd /data/lidongyu/projects/LibreChat/packages/api && LD_LIBRARY_PATH="$HOME/.local/ssl1.1/usr/lib/x86_64-linux-gnu" MONGOMS_VERSION=4.4.18 npx jest src/agents/steering src/stream 2>&1 | tail -40
-```
-Expected: 全绿。
-
-- [ ] **Step 5: 提交**
+- [ ] **Step 7: 跑 stream 与 steering 测试**
 
 ```bash
-git add packages/api/src/agents/steering/ api/server/controllers/agents/protocol.js packages/api/src/index.ts
-git commit -m "feat(steering): add upstream steering module and generation protocol"
+cd /data/lidongyu/projects/LibreChat/packages/api && LD_LIBRARY_PATH="$HOME/.local/ssl1.1/usr/lib/x86_64-linux-gnu" MONGOMS_VERSION=4.4.18 npx jest src/stream src/agents/steering 2>&1 | tail -40
 ```
+Expected: 全绿。例外：`redisClients.cache_integration.spec.ts` 等 Redis 集成套件在本机因无 Redis 服务而进程级崩溃，属基准中已记录的环境限制，不算失败。
+
+- [ ] **Step 8: 提交**
+
+```bash
+git add packages/api/src/stream/ packages/api/src/agents/steering/ api/server/controllers/agents/protocol.js packages/api/src/index.ts
+git commit -m "feat(stream): align stream subsystem with upstream and add steering module"
+```
+
+---
+
+## Task 4: 已并入 Task 3
+
+见 Task 3 开头的裁定说明。后续 Task 编号保持不变。
 
 ---
 
