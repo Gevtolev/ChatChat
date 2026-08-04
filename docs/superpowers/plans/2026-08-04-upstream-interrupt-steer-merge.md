@@ -389,6 +389,73 @@ git commit -m "feat(steer): wire steer controller and routes into agents chat"
 
 ---
 
+## Task 5b: steer 终局回收链
+
+> **2026-08-04 新增**：Task 5 的审查用真实 `GenerationJobManager` 探针发现的 Critical，范围超出 Task 5 故另立。**必须在 Task 6 之前完成** —— 原计划全文 grep `request.js` 零命中，没有任何后续步骤会碰到它，不补则一路带到 Task 10 手工验收才暴露，届时已有 5 个前端任务压在死后端上。
+
+**问题**：运行结束前未被排空的 steer 会被静默销毁。
+
+链路：`completeJob(streamId, err)` → `claimTerminalJob` → `jobStore.transitionStatusAndDrainSteers`（`GenerationJobManager.ts:3077`）把残留 steer 收进 `claim.drainedSteers`。上游 `request.js:1644-1654` 把它变成 final 事件里的 `pendingSteers` 并 park 起来，`index.js:470-500` 与 `sendJoblessStatus` 再用 `claimDetailed` 交还给客户端。
+
+我们 fork：`request.js` 全部走两参数 `completeJob`，**从不读 `terminalClaim.drainedSteers`**；`park` / `claimDetailed` / `unrecoveredSteers` / `recoveredSteer` 全仓库**零调用点**（`api/` 与 `packages/api/src` 双向 grep 确认）。
+
+**失败场景**：drain 只发生在 `PostToolBatch`（工具批次边界）或 `PreemptBoundary`。因此只要 agent 在这条 steer 入队后不再调用任何工具 —— **纯聊天回答是 ChatChat 最常见的形态** —— 用户打字发出的 steer 会 202 成功、chip 亮起、然后随运行结束一起消失：无错误、无回执、无重投。受影响的是全部普通订阅用户。
+
+**Files:**
+- Modify: `api/server/controllers/agents/request.js`（读取终局 claim 的 `drainedSteers`，park 并放进 final 事件）
+- Modify: `api/server/routes/agents/index.js`（`claimDetailed` 状态路由，把未回收的 steer 交还客户端）
+- Test: `api/server/controllers/agents/__tests__/` 下新增终局回收用例
+
+**Interfaces:**
+- Consumes: Task 3 的 `GenerationJobManager.transitionStatusAndDrainSteers` / `claimTerminalJob`、Task 5 的 job identity（`initialMetadata` + `client.jobCreatedAt`）
+- Produces: final 事件中的 `pendingSteers` 字段；`unrecoveredSteers` 回收路径。Task 7 的前端 chip 状态机依赖它来决定 chip 是消失还是保留待重投。
+
+- [ ] **Step 1: 对拍上游三处实现**
+
+```bash
+cd /data/lidongyu/projects/LibreChat
+git show upstream/dev:api/server/controllers/agents/request.js | sed -n '1630,1670p'
+git show upstream/dev:api/server/routes/agents/index.js | sed -n '460,510p'
+git grep -n "claimDetailed\|unrecoveredSteers\|recoveredSteer" upstream/dev -- api packages/api/src
+```
+把上游的完整回收链读明白后再动手，记进报告。
+
+- [ ] **Step 2: 用真实对象写失败测试（先红）**
+
+用真实 `GenerationJobManager` + 真实 `InMemoryJobStore`（**不要 mock**）构造场景：建 job → 入队一条 steer → 不经过任何工具边界直接 `completeJob` → 断言这条 steer 能从终局 claim 中被取回。
+
+Run: `cd api && LD_LIBRARY_PATH="$HOME/.local/ssl1.1/usr/lib/x86_64-linux-gnu" MONGOMS_VERSION=4.4.18 npx jest server/controllers/agents --testPathPattern=<新测试文件>`
+Expected: FAIL —— 当前 `drainedSteers` 从不被读取。
+
+- [ ] **Step 3: 按上游实现回收链**
+
+`request.js` 改用能拿到终局 claim 的 `completeJob` 形式，读 `claim.drainedSteers`，park 后放进 final 事件的 `pendingSteers`；`index.js` 补 `claimDetailed` 状态路由。每处与上游区间对拍。
+
+- [ ] **Step 4: 测试转绿并跑真实探针**
+
+Run: 同 Step 2 命令
+Expected: PASS
+
+另跑一次真实（无 mock）探针，确认「入队 steer → 无工具边界 → 运行结束」后该 steer 可被取回，输出贴进报告。
+
+- [ ] **Step 5: 串行全量回归**
+
+```bash
+cd /data/lidongyu/projects/LibreChat/api && LD_LIBRARY_PATH="$HOME/.local/ssl1.1/usr/lib/x86_64-linux-gnu" MONGOMS_VERSION=4.4.18 npx jest 2>&1 | tail -20
+cd /data/lidongyu/projects/LibreChat/packages/api && LD_LIBRARY_PATH="$HOME/.local/ssl1.1/usr/lib/x86_64-linux-gnu" MONGOMS_VERSION=4.4.18 npx jest 2>&1 | tail -20
+cd /data/lidongyu/projects/LibreChat && npm run build 2>&1 | grep -E "error TS|Tasks:"
+```
+Expected: 失败集合 ⊆ 基准；build 零 `error TS`。**不要并行跑**（mongodb-memory-server 争用会产生假失败）。
+
+- [ ] **Step 6: 提交**
+
+```bash
+git add api/server/controllers/agents/ api/server/routes/agents/index.js
+git commit -m "fix(steer): recover undrained steers on job termination"
+```
+
+---
+
 ## Task 6: 前端 SSE 层对齐并贴回 6 处自定义
 
 > ⚠️ 本 Task 风险仅次于 Task 2。上游对 `useResumableSSE.ts` 改了 3192 行，我们的 6 处自定义必须**逐条**贴回。
