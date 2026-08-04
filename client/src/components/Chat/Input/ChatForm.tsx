@@ -24,6 +24,7 @@ import {
 } from '~/hooks';
 import PendingManualSkillsChips from './PendingManualSkillsChips';
 import InterruptSteerButton from './InterruptSteerButton';
+import DuringRunSendButton from './DuringRunSendButton';
 import { cn, getModelSpec, removeFocusRings } from '~/utils';
 import { useGetStartupConfig } from '~/data-provider';
 import { mainTextareaId, BadgeItem } from '~/common';
@@ -398,6 +399,30 @@ const ChatForm = memo(function ChatForm({
 
   const isMoreThanThreeRows = visualRowCount > 3;
 
+  /** One button slot while a run is generating: with composer text the send
+   *  button takes over (Enter steers/queues; hover reveals all actions);
+   *  clearing the text restores Stop. Also owns `submitButtonRef` while
+   *  active — it is Enter's only path to a click, and `StopButton` unmounts
+   *  or `SendButton` disables during a run, so neither can receive it. */
+  const duringRunSlot = (() => {
+    if (steering.duringRunActive && (textValue?.trim() ?? '') !== '') {
+      return (
+        <DuringRunSendButton
+          ref={submitButtonRef}
+          control={methods.control}
+          steering={steering}
+          getText={() => methods.getValues('text')}
+          onConsumed={() => methods.reset()}
+          disabled={filesLoading}
+        />
+      );
+    }
+    if (showStopButton) {
+      return <StopButton stop={handleStopGenerating} setShowStopButton={setShowStopButton} />;
+    }
+    return null;
+  })();
+
   const baseClasses = useMemo(
     () =>
       cn(
@@ -607,17 +632,17 @@ const ChatForm = memo(function ChatForm({
                     </div>
                   )}
                 <div className={`${isRTL ? 'ml-2' : 'mr-2'}`}>
-                  {isSubmitting && showStopButton ? (
-                    <StopButton stop={handleStopGenerating} setShowStopButton={setShowStopButton} />
-                  ) : (
-                    endpoint && (
-                      <SendButton
-                        ref={submitButtonRef}
-                        control={methods.control}
-                        disabled={filesLoading || isSubmitting || disableInputs || isNotAppendable}
-                      />
-                    )
-                  )}
+                  {isSubmitting && (showStopButton || steering.duringRunActive)
+                    ? duringRunSlot
+                    : endpoint && (
+                        <SendButton
+                          ref={submitButtonRef}
+                          control={methods.control}
+                          disabled={
+                            filesLoading || isSubmitting || disableInputs || isNotAppendable
+                          }
+                        />
+                      )}
                 </div>
               </div>
               {TextToSpeech && automaticPlayback && <StreamAudio index={index} />}
