@@ -20,11 +20,24 @@ import {
   FileMapContext,
 } from '~/Providers';
 import { useUserTermsQuery, useGetStartupConfig } from '~/data-provider';
+import useKeyboardShortcuts from '~/hooks/useKeyboardShortcuts';
 import GuestUpgradeModal from '~/components/Auth/GuestUpgradeModal';
 import { UnifiedSidebar } from '~/components/UnifiedSidebar';
 import { TermsAndConditionsModal } from '~/components/ui';
 import { useHealthCheck } from '~/data-provider';
 import { Banner } from '~/components/Banners';
+
+/**
+ * Isolates keyboard shortcut listeners so they only mount after auth. Upstream also renders
+ * `KeyboardShortcutsDialog`/`KeyboardDeleteDialog` here; this fork hasn't ported those (they
+ * depend on the registry-driven Settings redesign, which is a separate, unmerged upstream
+ * change), so `showShortcuts`/`deleteConversation` toggle their recoil atoms without a
+ * consuming UI for now.
+ */
+function KeyboardShortcutsProvider() {
+  useKeyboardShortcuts();
+  return null;
+}
 
 export default function Root() {
   const [showTerms, setShowTerms] = useState(false);
@@ -129,6 +142,7 @@ export default function Root() {
               modalContent={config.interface.termsOfService.modalContent}
             />
           )}
+          <KeyboardShortcutsProvider />
         </AssistantsMapContext.Provider>
       </FileMapContext.Provider>
     </SetConvoProvider>
