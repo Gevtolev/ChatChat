@@ -6,6 +6,7 @@ const {
   buildMessageFiles,
   GenerationJobManager,
   decrementPendingRequest,
+  isSteerPreemptSupported,
   sanitizeMessageForTransmit,
   checkAndIncrementPendingRequest,
 } = require('@librechat/api');
@@ -117,7 +118,19 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
       userId,
     });
 
-    const job = await GenerationJobManager.createJob(streamId, userId, conversationId);
+    const job = await GenerationJobManager.createJob(streamId, userId, conversationId, {
+      initialMetadata: {
+        endpoint: endpointOption.endpoint,
+        // Persist the originating agent so steer-time ACL checks (steer.js's
+        // createAgentAccessCheck) can authorize against the run's actual
+        // identity instead of trusting the steer request body.
+        agent_id: endpointOption.agent_id ?? req.body?.agent_id,
+        // Recorded here because this process owns the generation: the steer
+        // route may land on a different replica whose own SDK probe would
+        // answer for the wrong process during a rolling deploy.
+        preemptCapable: isSteerPreemptSupported(),
+      },
+    });
     const jobCreatedAt = job.createdAt; // Capture creation time to detect job replacement
     req._resumableStreamId = streamId;
 
@@ -212,6 +225,12 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
     }
 
     client = result.client;
+
+    // Tag the client with THIS generation's identity so steer-time durability
+    // (emitChunk's expectedCreatedAt, the store's atomic drain/arm guards) can
+    // tell whether a newer request has since replaced this job on the same
+    // conversationId before acting on it.
+    client.jobCreatedAt = jobCreatedAt;
 
     if (client?.sender) {
       GenerationJobManager.updateMetadata(streamId, { sender: client.sender });
@@ -611,7 +630,13 @@ const _LegacyAgentController = async (req, res, next, initializeClient, addTitle
 
     // Create job in GenerationJobManager for abort handling
     // streamId === conversationId (pre-generated above)
-    const job = await GenerationJobManager.createJob(streamId, userId, conversationId);
+    const job = await GenerationJobManager.createJob(streamId, userId, conversationId, {
+      initialMetadata: {
+        endpoint: endpointOption.endpoint,
+        agent_id: endpointOption.agent_id ?? req.body?.agent_id,
+        preemptCapable: isSteerPreemptSupported(),
+      },
+    });
 
     // Store endpoint metadata for abort handling
     GenerationJobManager.updateMetadata(streamId, {
