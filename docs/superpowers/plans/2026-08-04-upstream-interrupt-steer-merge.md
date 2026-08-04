@@ -466,9 +466,38 @@ git commit -m "fix(steer): recover undrained steers on job termination"
 
 ---
 
-## Task 6: 前端 SSE 层对齐并贴回 6 处自定义
+## Task 6: 前端基础设施 + SSE 层对齐（已并入原 Task 7）
 
-> ⚠️ 本 Task 风险仅次于 Task 2。上游对 `useResumableSSE.ts` 改了 3192 行，我们的 6 处自定义必须**逐条**贴回。
+> ⚠️ **2026-08-05 范围修订。** 首次执行本 Task 时报 BLOCKED：`git checkout upstream/dev -- client/src/hooks/SSE/` 拿到的新代码依赖大量本 fork 不存在的前端基础设施。实测闭包为 **174 条新增类型错误、37 个缺失导出符号、5 个缺失模块**，横跨 steer / 活动标签 / HITL 审批 / 协议 v2 协商 / usage 统计五个功能域 —— **上游前端 SSE 层已与这些功能深度耦合，无法只取 steer 部分**。决策者裁定：全量对齐。原 Task 7 的内容并入本 Task（状态层是这批基础设施的一部分），后续 Task 编号不变。
+>
+> 上一次执行的成果保存在 WIP 提交 `cc2326fac`（SSE 目录的自定义贴回 + `getStreamStartFailureText` 的 export 与对象分支修复），**不要丢弃，在其基础上继续**。
+>
+> ⚠️ 本 Task 是整个计划风险最高的一步。
+
+**必须搬入的缺失模块**（均已确认存在于 `upstream/dev @ b80729299`，可直接 `git checkout upstream/dev -- <path>`）：
+
+```
+client/src/utils/steer.ts          client/src/utils/approval.ts
+client/src/utils/tokens.ts         client/src/utils/focus.ts
+client/src/store/usage.ts          client/src/store/sandbox.ts
+client/src/store/steer.ts          client/src/data-provider/SSE/protocol.ts
+client/src/hooks/Chat/useSteering.ts        client/src/hooks/Chat/useSteerCancel.ts
+client/src/hooks/Chat/useSteerConvert.ts    client/src/hooks/Chat/useFocusRegeneratedResponse.ts
+```
+
+**另需向桶文件追加导出**（只加 steer/协议/usage 相关行，**禁止整体覆盖** —— 这些文件含本 fork 自己的导出）：
+`client/src/utils/index.ts`、`client/src/store/index.ts`、`client/src/store/families.ts`、`client/src/data-provider/index.ts`、`client/src/data-provider/SSE/queries.ts`、`client/src/utils/messages.ts`
+
+**37 个缺失符号的完整清单**（验收时逐个确认可解析）：
+`appendAppliedSteerIds` `applyActivityLabelPart` `applyPendingAction` `applySteerPart` `carriedSteerContext` `collectAppliedSteerIds` `countTaggedApprovalParts` `countTrailingOutputChars` `dedupeSteersById` `DrainAfterAbort` `estimateTokens` `findActivityLabelMessageIndex` `findPendingActionMessageIndex` `findSteerMessageIndex` `generationProtocolHeaders` `GenerationProtocolVersion` `GENERATION_PROTOCOL_VERSION` `getBranchSiblingIndexesForTarget` `getGenerationProtocolVersion` `insertQueuedOrigin` `markStreamStartFailedMetadata` `markTitleGenerationProcessed` `migrateIndex` `normalizeUsageUnits` `PendingSteer` `postGenerationRequest` `QueuedMessage` `QueuedMessageOrigin` `requestChatFocus` `resolveRunEndTarget` `sandboxStartingByToolCallId` `setEntryUsage` `sumBranch` `sumTotalUsage` `supportsGenerationProtocolV2` `upsertEntries`
+
+**建议施工顺序**（叶子优先，每层跑一次 `tsc` 看新增错误数单调下降）：
+1. `utils/*`（steer、approval、tokens、focus）与 `store/*`（usage、sandbox、steer）—— 叶子，不依赖 SSE
+2. `data-provider/SSE/protocol.ts` 与 `queries.ts` 的增量
+3. 桶文件追加导出
+4. 最后收 `hooks/SSE/`（在 WIP 基础上）与 `hooks/Chat/` 的四个 steer hooks
+
+**已知结论（首次执行验证，可直接采信，不必重做）**：6 处自定义中 **A3–A5（`finalReceived` 早退）与 B2（project 缓存失效三处）已被上游独立收敛为等价或更完备的实现，无需贴回**；需要手工贴回的只有 **A2/C（`!!` 布尔强制）与 B1/B3（匿名配额弹窗）**。另外上游自带的 `getStreamStartFailureText` 未 export、且对象型 `errorData` 分支跳过文本提取（即"用户看到裸 JSON"的 bug 重现），WIP 提交已修复并补回 6 个单测 —— 保留该修复。
 
 **Files:**
 - Overwrite then patch: `client/src/hooks/SSE/useResumableSSE.ts`、`useEventHandlers.ts`、`useSSE.ts`
@@ -539,59 +568,9 @@ git commit -m "chore(sse): align SSE hooks with upstream and restore local custo
 
 ---
 
-## Task 7: 前端 steer 状态层
+## Task 7: 已并入 Task 6
 
-**Files:**
-- Create: `client/src/store/steer.ts`、`client/src/utils/steer.ts`
-- Create: `client/src/hooks/Chat/{useSteering,useSteerCancel,useSteerConvert}.ts` + 对应测试
-- Modify: `client/src/data-provider/SSE/mutations.ts`（steer mutation）
-- Modify: `client/src/store/families.ts`（steer 相关 atom family）
-- Modify: `client/src/store/index.ts`（导出 steer store）
-
-**Interfaces:**
-- Consumes: Task 5 的 steer 端点、Task 6 的 SSE 事件
-- Produces: `useSteering()`（提交 steer / 排队消息）、`useSteerCancel()`、`useSteerConvert()`、`store.steer*` atoms。Task 8 的 UI 组件全部消费这些。
-
-- [ ] **Step 1: 取上游状态层文件**
-
-```bash
-cd /data/lidongyu/projects/LibreChat
-git checkout upstream/dev -- client/src/store/steer.ts client/src/utils/steer.ts
-git checkout upstream/dev -- client/src/hooks/Chat/useSteering.ts client/src/hooks/Chat/useSteerCancel.ts client/src/hooks/Chat/useSteerConvert.ts
-git checkout upstream/dev -- client/src/hooks/Chat/__tests__/useSteering.spec.tsx client/src/hooks/Chat/__tests__/useSteerConvert.spec.tsx
-git checkout upstream/dev -- client/src/utils/__tests__/steer.spec.ts
-```
-
-- [ ] **Step 2: 手工合并三个共享文件（不要整体覆盖）**
-
-```bash
-git diff main:client/src/store/families.ts upstream/dev:client/src/store/families.ts | grep -iE '^\+.*steer'
-git diff main:client/src/store/index.ts upstream/dev:client/src/store/index.ts | grep -iE '^\+.*steer'
-git diff main:client/src/data-provider/SSE/mutations.ts upstream/dev:client/src/data-provider/SSE/mutations.ts
-```
-只把 steer 相关行加进我们的版本。`store/index.ts` 里必须保住我们的 `guestUpgradeModalOpen` 导出。
-
-- [ ] **Step 3: 类型检查与测试**
-
-```bash
-cd /data/lidongyu/projects/LibreChat && npm run build 2>&1 | grep -E "error TS" | head -20
-cd /data/lidongyu/projects/LibreChat/client && npx jest src/hooks/Chat src/utils/__tests__/steer 2>&1 | tail -30
-```
-Expected: 无 TS 错误；测试全绿。
-
-- [ ] **Step 4: 确认匿名弹窗 atom 未丢**
-
-```bash
-grep -c "guestUpgradeModalOpen" client/src/store/index.ts client/src/store/misc.ts
-```
-Expected: 均 ≥1。
-
-- [ ] **Step 5: 提交**
-
-```bash
-git add client/src/store/ client/src/utils/steer.ts client/src/utils/__tests__/steer.spec.ts client/src/hooks/Chat/ client/src/data-provider/SSE/mutations.ts
-git commit -m "feat(steer): add client steer state layer and mutations"
-```
+见 Task 6 开头的范围修订说明。状态层（`store/steer.ts`、`utils/steer.ts`、四个 steer hooks、`data-provider/SSE/mutations.ts`）是 SSE 层的编译前置依赖，无法分开交付。后续 Task 编号保持不变。
 
 ---
 
