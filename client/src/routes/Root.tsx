@@ -20,6 +20,7 @@ import {
   FileMapContext,
 } from '~/Providers';
 import { useUserTermsQuery, useGetStartupConfig } from '~/data-provider';
+import KeyboardShortcutsDialog from '~/components/Nav/KeyboardShortcutsDialog';
 import useKeyboardShortcuts from '~/hooks/useKeyboardShortcuts';
 import GuestUpgradeModal from '~/components/Auth/GuestUpgradeModal';
 import { UnifiedSidebar } from '~/components/UnifiedSidebar';
@@ -29,14 +30,15 @@ import { Banner } from '~/components/Banners';
 
 /**
  * Isolates keyboard shortcut listeners so they only mount after auth. Upstream also renders
- * `KeyboardShortcutsDialog`/`KeyboardDeleteDialog` here; this fork hasn't ported those (they
- * depend on the registry-driven Settings redesign, which is a separate, unmerged upstream
- * change), so `showShortcuts`/`deleteConversation` toggle their recoil atoms without a
- * consuming UI for now.
+ * `KeyboardDeleteDialog` here; this fork hasn't ported that one yet because it needs a
+ * `currentConversationId` prop added to this fork's `DeleteButton.tsx` (upstream's version
+ * already has it) so the dialog can target a conversation that isn't the routed one. Until
+ * then, `deleteConversation` (Ctrl+Shift+Backspace) sets `keyboardDeleteTarget` without a
+ * consuming UI.
  */
 function KeyboardShortcutsProvider() {
   useKeyboardShortcuts();
-  return null;
+  return <KeyboardShortcutsDialog />;
 }
 
 export default function Root() {

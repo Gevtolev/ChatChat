@@ -35,6 +35,7 @@ type HoverButtonProps = {
   isLast?: boolean;
   className?: string;
   buttonStyle?: string;
+  dataTestId?: string;
 };
 
 const extractMessageContent = (message: TMessage): string => {
@@ -80,6 +81,7 @@ const HoverButton = memo(
     isDisabled = false,
     isLast = false,
     className = '',
+    dataTestId,
   }: HoverButtonProps) => {
     const buttonStyle = cn(
       'hover-button rounded-lg p-1.5 text-text-secondary-alt',
@@ -101,6 +103,7 @@ const HoverButton = memo(
         type="button"
         title={title}
         disabled={isDisabled}
+        data-testid={dataTestId}
       >
         {icon}
       </button>
@@ -170,6 +173,7 @@ const HoverButtons = ({
             title={localize('com_ui_regenerate')}
             icon={<RegenerateIcon size="19" />}
             isLast={isLast}
+            dataTestId={isLast ? 'regenerate-generation-button' : undefined}
           />
         )}
       </div>
@@ -201,6 +205,7 @@ const HoverButtons = ({
               icon={props.icon}
               isActive={props.isActive}
               isLast={isLast}
+              dataTestId={isLast && !isCreatedByUser ? 'read-aloud-button' : undefined}
             />
           )}
         />
@@ -220,6 +225,7 @@ const HoverButtons = ({
             ? 'group-hover:opacity-100 [@media(hover:hover)]:opacity-0'
             : '',
         )}
+        dataTestId={!isCreatedByUser ? 'copy-response-button' : undefined}
       />
 
       {/* Edit Button */}
@@ -259,6 +265,7 @@ const HoverButtons = ({
           icon={<RegenerateIcon size="19" />}
           isLast={isLast}
           className="active"
+          dataTestId={isLast ? 'regenerate-generation-button' : undefined}
         />
       )}
 
@@ -270,6 +277,7 @@ const HoverButtons = ({
           icon={<ContinueIcon className="w-19 h-19 -rotate-180" />}
           isLast={isLast}
           className="active"
+          dataTestId={isLast ? 'continue-generation-button' : undefined}
         />
       )}
     </div>

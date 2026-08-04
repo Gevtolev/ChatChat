@@ -4,6 +4,7 @@ import { render, screen, act, cleanup } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createMemoryRouter, RouterProvider } from 'react-router-dom';
 import Root from '~/routes/Root';
+import { mainTextareaId } from '~/common';
 import store from '~/store';
 
 /**
@@ -74,7 +75,12 @@ jest.mock('~/components/Banners', () => ({
 }));
 
 function ChatArea() {
-  return <textarea data-testid="composer" />;
+  return (
+    <>
+      <textarea data-testid="composer" id={mainTextareaId} />
+      <input data-testid="text-field" />
+    </>
+  );
 }
 
 function SidebarProbe() {
@@ -146,7 +152,44 @@ describe('Root — keyboard shortcuts mount', () => {
     expect(event.defaultPrevented).toBe(false);
   });
 
-  it('ignores a non-editing-allowed shortcut chord while the composer is focused', () => {
+  it('opens the real KeyboardShortcutsDialog on Ctrl+Shift+/ and pressing it again closes it', () => {
+    renderRoot();
+    expect(screen.queryByText('com_shortcut_keyboard_shortcuts')).not.toBeInTheDocument();
+
+    dispatchOn(document.body, { key: '/', ctrlKey: true, shiftKey: true });
+    expect(screen.getByText('com_shortcut_keyboard_shortcuts')).toBeInTheDocument();
+
+    dispatchOn(document.body, { key: '/', ctrlKey: true, shiftKey: true });
+    expect(screen.queryByText('com_shortcut_keyboard_shortcuts')).not.toBeInTheDocument();
+  });
+
+  it('gates other shortcuts while the dialog is open and restores them once it closes', () => {
+    renderRoot();
+    dispatchOn(document.body, { key: '/', ctrlKey: true, shiftKey: true });
+    expect(screen.getByText('com_shortcut_keyboard_shortcuts')).toBeInTheDocument();
+
+    dispatchOn(document.body, { key: 'S', ctrlKey: true, shiftKey: true });
+    expect(screen.getByTestId('sidebar-expanded')).toHaveTextContent('true');
+
+    dispatchOn(document.body, { key: '/', ctrlKey: true, shiftKey: true });
+    expect(screen.queryByText('com_shortcut_keyboard_shortcuts')).not.toBeInTheDocument();
+
+    dispatchOn(document.body, { key: 'S', ctrlKey: true, shiftKey: true });
+    expect(screen.getByTestId('sidebar-expanded')).toHaveTextContent('false');
+  });
+
+  it('ignores a non-editing-allowed shortcut chord typed into a plain text field', () => {
+    renderRoot();
+    const input = screen.getByTestId('text-field');
+    (input as HTMLInputElement).focus();
+
+    const event = dispatchOn(input, { key: 'S', ctrlKey: true, shiftKey: true });
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(screen.getByTestId('sidebar-expanded')).toHaveTextContent('true');
+  });
+
+  it('ignores a non-editing-allowed shortcut chord while the composer (the real mainTextareaId) is focused', () => {
     renderRoot();
     const textarea = screen.getByTestId('composer');
     (textarea as HTMLTextAreaElement).focus();
