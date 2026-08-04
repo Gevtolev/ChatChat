@@ -113,6 +113,18 @@ async function _authenticatedFetch(url: string, options?: RequestInit): Promise<
     return response;
   }
 
+  /** Skip refresh when the Authorization header has been cleared (e.g. during logout),
+   *  but allow shared link requests to proceed so auth recovery/redirect can happen.
+   *  Mirrors the axios interceptor's guard above — without it, a steer request
+   *  in flight when the user logs out can resurrect a cleared token via
+   *  `dispatchTokenUpdatedEvent` if the refresh cookie hasn't expired server-side yet. */
+  if (
+    !axios.defaults.headers.common['Authorization'] &&
+    !window.location.pathname.startsWith('/share/')
+  ) {
+    return response;
+  }
+
   if (isRefreshing) {
     try {
       const refreshedToken = await new Promise<string | null>((resolve, reject) => {

@@ -502,7 +502,17 @@ export default function useSteering({
    *  gets reaped. Failure is tolerated; send-time marking is the backstop. */
   const markQueuedFilesUsage = useCallback(
     (files?: TMessage['files']) => {
-      if (files == null || files.length === 0) {
+      /**
+       * Disabled pending a backend counterpart for `POST /api/files/usage`
+       * (tracked separately — the client-side mutation plumbing exists but
+       * the route doesn't). Every call would 404, but
+       * `api/server/routes/files/index.js` rate-limits all POST `/api/files`
+       * traffic (except `/speech`) up front, so a guaranteed-404 request
+       * would still burn one of the user's upload rate-limit tokens for
+       * nothing. Remove this flag once the route lands.
+       */
+      const filesUsageBackendAvailable = false;
+      if (!filesUsageBackendAvailable || files == null || files.length === 0) {
         return;
       }
       const file_ids: string[] = [];

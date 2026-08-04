@@ -88,9 +88,10 @@ export function markTitleGenerationProcessed(conversationId: string) {
  * Hook to process the title generation queue.
  *
  * Timing is driven by the server's effective default (`titleGenerationTiming`):
- * - `immediate` (default): fetch the title in parallel with the active stream so
- *   it appears while the response is still streaming.
- * - `final` (legacy): fetch only after the stream completes.
+ * - `immediate`: fetch the title in parallel with the active stream so it
+ *   appears while the response is still streaming.
+ * - `final` (this fork's default — see the `timing` fallback below): fetch
+ *   only after the stream completes.
  *
  * The title query retries on 404 (server still generating) so a transient
  * not-ready response is never treated as final (#13318).
@@ -99,8 +100,20 @@ export function markTitleGenerationProcessed(conversationId: string) {
 export function useTitleGeneration(enabled = true) {
   const queryClient = useQueryClient();
   const { data: startupConfig } = useGetStartupConfig();
-  /** Defaults to immediate until startup config loads. */
-  const timing = startupConfig?.titleGenerationTiming ?? 'immediate';
+  /**
+   * Deliberate fork deviation from upstream's `'immediate'` default: our
+   * backend never sends `titleGenerationTiming` (`addTitle` in
+   * `api/server/controllers/agents/request.js` only fires after
+   * `emitDone`/`finishTerminalJob`, i.e. `'final'` semantics), and
+   * `/api/convos/gen_title/:id` (`api/server/routes/convos.js`) is a
+   * long-poll that sleeps ~15.5s per attempt before it 404s. Eager fetching
+   * would multiply that request up to ~8x per new conversation (each
+   * holding a socket for up to 15.5s), which our single small production
+   * instance cannot absorb. Do not "fix" this back to `'immediate'` during
+   * a future upstream sync without also rewriting `gen_title` to be
+   * non-blocking server-side.
+   */
+  const timing = startupConfig?.titleGenerationTiming ?? 'final';
 
   const [queueVersion, setQueueVersion] = useState(0);
   const [readyToFetch, setReadyToFetch] = useState<string[]>([]);
