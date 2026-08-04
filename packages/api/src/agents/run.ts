@@ -1,5 +1,5 @@
 import { logger } from '@librechat/data-schemas';
-import { Run, Providers, Constants } from '@librechat/agents';
+import { Run, Providers, Constants, HookRegistry } from '@librechat/agents';
 import {
   KnownEndpoints,
   MAX_SUBAGENT_DEPTH,
@@ -14,8 +14,10 @@ import type {
   ContextPruningConfig,
   OpenAIClientOptions,
   StandardGraphConfig,
+  StreamPreemption,
   LCToolRegistry,
   SubagentConfig,
+  HookCallback,
   AgentInputs,
   GenericTool,
   RunConfig,
@@ -31,6 +33,7 @@ import type {
 import type { BaseMessage } from '@librechat/agents/langchain/messages';
 import type { AppConfig, IUser } from '@librechat/data-schemas';
 import type * as t from '~/types';
+import { isSteeringSupported, isSteerPreemptSupported } from '~/agents/steering/runtime';
 import { getProviderConfig } from '~/endpoints/config/providers';
 import { resolveHeaders, createSafeUser } from '~/utils/env';
 import { getOpenAIConfig } from '~/endpoints/openai/config';
@@ -745,6 +748,7 @@ export async function createRun({
   initialSummary,
   calibrationRatio,
   appConfig,
+  steering,
   streaming = true,
   streamUsage = true,
 }: {
@@ -767,6 +771,26 @@ export async function createRun({
    * (e.g. "Ollama") in the summarization config to SDK-recognized providers.
    */
   appConfig?: AppConfig;
+  /**
+   * The run-scoped steer-drain hook (a `PostToolBatch` callback built via
+   * `createSteerDrainHook`). Registered on the run's hook registry — steering
+   * needs no checkpointer (injection merges via the messages reducer inside
+   * the tool node). Only the resumable agents controller passes this.
+   */
+  steering?: {
+    hook: HookCallback<'PostToolBatch'>;
+    /**
+     * The PreemptBoundary twin of `hook`, built via
+     * `createSteerPreemptBoundaryHook` from the same drain closures. Fires
+     * when the SDK seals a model stream mid-generation on a preempt request.
+     */
+    preemptHook?: HookCallback<'PreemptBoundary'>;
+    /**
+     * Level-triggered O(1) poll over the job's armed preempt requests
+     * (`createSteerPreemptPoll`). Threaded into `RunConfig.preemption`.
+     */
+    preemption?: StreamPreemption;
+  };
 } & Pick<
   RunConfig,
   'tokenCounter' | 'customHandlers' | 'indexTokenCountMap' | 'initialSessions'
@@ -988,6 +1012,22 @@ export async function createRun({
    */
   const enableToolOutputReferences = anyAgentHasCodeEnv(agents);
 
+  /**
+   * The run's hook registry: the steer-drain `PostToolBatch` hook, plus its
+   * `PreemptBoundary` twin when the installed SDK can seal mid-stream. Hard-
+   * gated on SDK support — draining on an SDK that ignores `injectedMessages`
+   * would silently drop the user's words (the steer controller 501s in that
+   * case; this guard is defense in depth).
+   */
+  let hooks: HookRegistry | undefined;
+  if (steering != null && isSteeringSupported()) {
+    hooks = hooks ?? new HookRegistry();
+    hooks.register('PostToolBatch', { hooks: [steering.hook] });
+    if (steering.preemptHook != null && isSteerPreemptSupported()) {
+      hooks.register('PreemptBoundary', { hooks: [steering.preemptHook] });
+    }
+  }
+
   return Run.create({
     runId,
     graphConfig,
@@ -1000,5 +1040,11 @@ export async function createRun({
     ...(enableToolOutputReferences && {
       toolOutputReferences: { enabled: true },
     }),
+    ...(hooks && { hooks }),
+    // Preemption is observation-only like the boundary hooks: the poll never
+    // mutates and the SDK refuses to seal unless a PreemptBoundary matcher is
+    // live, so gating both on the same capability keeps them in lockstep.
+    ...(steering?.preemption != null &&
+      isSteerPreemptSupported() && { preemption: steering.preemption }),
   });
 }
