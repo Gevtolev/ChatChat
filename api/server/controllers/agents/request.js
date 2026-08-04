@@ -2,6 +2,7 @@ const { logger } = require('@librechat/data-schemas');
 const { Constants, ViolationTypes } = require('librechat-data-provider');
 const {
   sendEvent,
+  toPendingSteer,
   getViolationInfo,
   buildMessageFiles,
   GenerationJobManager,
@@ -363,21 +364,29 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
           );
         }
 
-        // Check if our job was replaced by a new request before emitting
-        // This prevents stale requests from emitting events to newer jobs
-        const currentJob = await GenerationJobManager.getJob(streamId);
-        const jobWasReplaced = !currentJob || currentJob.createdAt !== jobCreatedAt;
+        // Atomically win terminal ownership for this exact job epoch and
+        // collect any steer still queued when the run ended without ever
+        // crossing a PostToolBatch/PreemptBoundary drain point. This replaces
+        // the old getJob+compare check: claimTerminalJob fences on
+        // jobCreatedAt itself and returns null for a replaced/stolen job.
+        const terminalClaim = await GenerationJobManager.claimTerminalJob(
+          streamId,
+          wasAbortedBeforeComplete ? 'error' : 'complete',
+          wasAbortedBeforeComplete ? 'Request aborted' : undefined,
+          jobCreatedAt,
+        );
 
-        if (jobWasReplaced) {
+        if (!terminalClaim) {
           logger.debug(`[ResumableAgentController] Skipping FINAL emit - job was replaced`, {
             streamId,
             originalCreatedAt: jobCreatedAt,
-            currentCreatedAt: currentJob?.createdAt,
           });
           // Still decrement pending request since we incremented at start
           await decrementPendingRequest(userId);
           return;
         }
+
+        const pendingSteers = terminalClaim.drainedSteers.map(toPendingSteer);
 
         if (!wasAbortedBeforeComplete) {
           const finalEvent = {
@@ -386,6 +395,7 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
             title: conversation.title,
             requestMessage: sanitizeMessageForTransmit(userMessage),
             responseMessage: { ...response },
+            ...(pendingSteers.length > 0 && { pendingSteers }),
           };
 
           logger.debug(`[ResumableAgentController] Emitting FINAL event`, {
@@ -397,7 +407,7 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
           });
 
           await GenerationJobManager.emitDone(streamId, finalEvent);
-          GenerationJobManager.completeJob(streamId);
+          await GenerationJobManager.finishTerminalJob(terminalClaim);
           await decrementPendingRequest(userId);
         } else {
           const finalEvent = {
@@ -406,6 +416,7 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
             title: conversation.title,
             requestMessage: sanitizeMessageForTransmit(userMessage),
             responseMessage: { ...response, unfinished: true },
+            ...(pendingSteers.length > 0 && { pendingSteers }),
           };
 
           logger.debug(`[ResumableAgentController] Emitting ABORTED FINAL event`, {
@@ -417,7 +428,7 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
           });
 
           await GenerationJobManager.emitDone(streamId, finalEvent);
-          GenerationJobManager.completeJob(streamId, 'Request aborted');
+          await GenerationJobManager.finishTerminalJob(terminalClaim);
           await decrementPendingRequest(userId);
         }
 

@@ -187,7 +187,17 @@ router.get('/chat/status/:conversationId', async (req, res) => {
   const job = await GenerationJobManager.getJob(conversationId);
 
   if (!job) {
-    return res.json({ active: false });
+    // The default completeJob path deletes the job record immediately, so
+    // this IS the common reload-after-terminal case — recover any steer that
+    // was still queued when the run ended without crossing a drain boundary.
+    const claimed = await GenerationJobManager.steering.claimDetailed(conversationId, {
+      userId: req.user.id,
+      tenantId: req.user.tenantId,
+    });
+    return res.json({
+      active: false,
+      ...(claimed.steers.length > 0 && { unrecoveredSteers: claimed.steers }),
+    });
   }
 
   if (job.metadata.userId !== req.user.id) {
@@ -203,6 +213,17 @@ router.get('/chat/status/:conversationId', async (req, res) => {
   const resumeState = await GenerationJobManager.getResumeState(conversationId);
   const isActive = job.status === 'running';
 
+  let unrecoveredSteers;
+  if (!isActive) {
+    const claimed = await GenerationJobManager.steering.claimDetailed(conversationId, {
+      userId: req.user.id,
+      tenantId: req.user.tenantId,
+    });
+    if (claimed.steers.length > 0) {
+      unrecoveredSteers = claimed.steers;
+    }
+  }
+
   res.json({
     active: isActive,
     streamId: conversationId,
@@ -210,6 +231,7 @@ router.get('/chat/status/:conversationId', async (req, res) => {
     aggregatedContent: resumeState?.aggregatedContent ?? [],
     createdAt: job.createdAt,
     resumeState,
+    ...(unrecoveredSteers && { unrecoveredSteers }),
   });
 });
 
