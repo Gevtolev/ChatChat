@@ -1957,22 +1957,32 @@ describe('useSteering', () => {
       });
     });
 
-    it('marks queued files used exactly once when queueing from the composer', () => {
+    /**
+     * `markQueuedFilesUsage` in `useSteering.ts` is temporarily short-circuited by
+     * the `filesUsageBackendAvailable = false` guard: the backend `POST
+     * /api/files/usage` route doesn't exist yet, and `api/server/routes/files/index.js`
+     * rate-limits all POST `/api/files` traffic (except `/speech`) up front, so a
+     * guaranteed-404 call would still burn one of the user's upload rate-limit
+     * tokens for nothing. Once that route lands and the guard flips back to
+     * `true`, these two assertions must be restored to expect exactly one
+     * `mockMarkUsage` call with `{ file_ids: ['file-1'] }` (see git history for
+     * the pre-guard version) — do not delete or skip them in the meantime, they
+     * are the only regression guard on this path.
+     */
+    it('does not mark queued files used when queueing from the composer (files-usage backend pending)', () => {
       const { result } = setupWithFiles();
       act(() => {
         result.current.steering.queueFromComposer('queued with media');
       });
-      expect(mockMarkUsage).toHaveBeenCalledTimes(1);
-      expect(mockMarkUsage).toHaveBeenCalledWith({ file_ids: ['file-1'] });
+      expect(mockMarkUsage).not.toHaveBeenCalled();
     });
 
-    it('marks queued files used on interrupt & send', () => {
+    it('does not mark queued files used on interrupt & send (files-usage backend pending)', () => {
       const { result } = setupWithFiles();
       act(() => {
         result.current.steering.interruptAndSend('urgent with media');
       });
-      expect(mockMarkUsage).toHaveBeenCalledTimes(1);
-      expect(mockMarkUsage).toHaveBeenCalledWith({ file_ids: ['file-1'] });
+      expect(mockMarkUsage).not.toHaveBeenCalled();
     });
 
     it('does not mark usage for text-only queueing', () => {
