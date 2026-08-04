@@ -138,6 +138,22 @@ export const useUploadFileMutation = (
   });
 };
 
+/**
+ * Owner-scoped usage touch for uploads entering the client-side queue, so the
+ * upload-window TTL cannot reap them while the message waits out a long run.
+ * Fire-and-forget: failures are tolerated (send-time marking is the backstop).
+ */
+export const useMarkFilesUsageMutation = (): UseMutationResult<
+  t.TFilesUsageResponse, // response data
+  unknown, // error
+  t.TFilesUsageBody, // request
+  unknown // context
+> => {
+  return useMutation([MutationKeys.fileUsage], {
+    mutationFn: (body: t.TFilesUsageBody) => dataService.markFilesUsage(body),
+  });
+};
+
 export const useDeleteFilesMutation = (
   _options?: t.DeleteMutationOptions,
 ): UseMutationResult<

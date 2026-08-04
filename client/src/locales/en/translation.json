@@ -1651,6 +1651,8 @@
   "com_ui_sr_public_skill": "Public skill",
   "com_ui_stack_trace": "Stack Trace",
   "com_ui_status_prefix": "Status:",
+  "com_ui_steer_cancel_failed": "Could not cancel the steering message — it may still reach the agent",
+  "com_ui_steer_paused_queued": "The agent is waiting for your review — your message was queued instead",
   "com_ui_stop": "Stop",
   "com_ui_storage": "Storage",
   "com_ui_storage_filter_sort": "Filter and Sort by Storage",

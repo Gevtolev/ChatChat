@@ -3576,15 +3576,17 @@ export default function useResumableSSE(
              * Never attach A's submission directly to B. Discover B's
              * authoritative resume snapshot, refresh durable history, then let
              * useResumeOnLoad construct a new epoch-fenced submission. */
+            const replacementConversationId = replacementStart.conversationId;
+            const replacementGenerationCreatedAt = replacementStart.generationCreatedAt;
             const replacementStatus =
               knownReplacementStatus ??
-              (await fetchStreamStatus(replacementStart.conversationId).catch((error) => {
+              (await fetchStreamStatus(replacementConversationId).catch((error) => {
                 if (!isCurrentEffect()) {
                   return null;
                 }
                 logger.warn('ResumableSSE', 'Could not discover replacement start generation', {
-                  conversationId: replacementStart.conversationId,
-                  generationCreatedAt: replacementStart.generationCreatedAt,
+                  conversationId: replacementConversationId,
+                  generationCreatedAt: replacementGenerationCreatedAt,
                   error,
                 });
                 return null;

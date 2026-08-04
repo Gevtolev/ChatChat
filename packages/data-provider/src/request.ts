@@ -84,6 +84,65 @@ const processQueue = (error: AxiosError | null, token: string | null = null) => 
   failedQueue = [];
 };
 
+const getBearerToken = (): string | null => {
+  const header = axios.defaults.headers.common['Authorization'];
+  if (typeof header !== 'string') {
+    return null;
+  }
+  return header.startsWith('Bearer ') ? header.slice('Bearer '.length) : header;
+};
+
+const withAuthorization = (options: RequestInit | undefined, token: string | null): RequestInit => {
+  const headers = new Headers(options?.headers);
+  if (token) {
+    headers.set('Authorization', `Bearer ${token}`);
+  }
+  return { ...options, headers };
+};
+
+/**
+ * Reactive token refresh for raw `fetch` calls. Generation-control routes (steer
+ * arm/preempt/cancel) use `fetch` instead of axios so an `AbortSignal` can be passed
+ * directly, which bypasses the axios response interceptor above. Shares its
+ * `isRefreshing`/`failedQueue` single-flight lock so a 401 on either transport
+ * triggers at most one `/api/auth/refresh` call.
+ */
+async function _authenticatedFetch(url: string, options?: RequestInit): Promise<Response> {
+  const response = await fetch(url, withAuthorization(options, getBearerToken()));
+  if (response.status !== 401 || typeof window === 'undefined') {
+    return response;
+  }
+
+  if (isRefreshing) {
+    try {
+      const refreshedToken = await new Promise<string | null>((resolve, reject) => {
+        failedQueue.push({ resolve, reject });
+      });
+      return fetch(url, withAuthorization(options, refreshedToken));
+    } catch {
+      return response;
+    }
+  }
+
+  isRefreshing = true;
+  try {
+    const refreshResponse = await refreshToken();
+    const refreshedToken = refreshResponse?.token ?? '';
+    if (!refreshedToken) {
+      processQueue(new AxiosError('Token refresh failed'), null);
+      return response;
+    }
+    dispatchTokenUpdatedEvent(refreshedToken);
+    processQueue(null, refreshedToken);
+    return fetch(url, withAuthorization(options, refreshedToken));
+  } catch (err) {
+    processQueue(err as AxiosError, null);
+    return response;
+  } finally {
+    isRefreshing = false;
+  }
+}
+
 if (typeof window !== 'undefined') {
   axios.interceptors.response.use(
     (response) => response,
@@ -169,4 +228,5 @@ export default {
   patch: _patch,
   refreshToken,
   dispatchTokenUpdatedEvent,
+  authenticatedFetch: _authenticatedFetch,
 };

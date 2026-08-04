@@ -1286,6 +1286,10 @@ export type TStartupConfig = {
   modelDescriptions?: Record<string, Record<string, string>>;
   sharedLinksEnabled: boolean;
   publicSharedLinksEnabled: boolean;
+  /** Effective default timing for when conversation titles become fetchable.
+   * `immediate` = fetch in parallel with the active stream (default);
+   * `final` = fetch only after the stream completes (legacy). */
+  titleGenerationTiming?: 'immediate' | 'final';
   anonymousAccessEnabled?: boolean;
   analyticsGtmId?: string;
   bundlerURL?: string;

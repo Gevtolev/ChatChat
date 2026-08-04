@@ -146,6 +146,8 @@ export type TSubmission = {
   isContinued?: boolean;
   isTemporary: boolean;
   messages: TMessage[];
+  /** Client-only full message context used to restore branch siblings after scoped regenerate. */
+  regenerateMessages?: TMessage[];
   isRegenerate?: boolean;
   initialResponse?: TMessage;
   conversation: Partial<TConversation>;
@@ -153,10 +155,45 @@ export type TSubmission = {
   clientTimestamp?: string;
   ephemeralAgent?: TEphemeralAgent | null;
   editedContent?: TEditedContent | null;
+  /**
+   * Length of the retained content prefix for an edited resubmission, captured
+   * when the submission is built.
+   *
+   * The server indexes only NEW content, so the client offsets incoming
+   * indices by the prefix it kept. `initialResponse.content` cannot be used
+   * for that after a reconnect: the resume sync overwrites it with the
+   * server's completion-local snapshot, whose length is unrelated to the
+   * prefix. Recording the length up front keeps the offset stable across
+   * resumes for run steps and activity labels alike.
+   */
+  editPrefixLength?: number;
+  /**
+   * Set once a resume SYNC has replaced the response's retained prefix with
+   * the server's completion-local snapshot. From that point the prefix is
+   * gone from the rendered message and server indices are absolute in the
+   * new space, so {@link editPrefixLength} must NOT be applied — by run
+   * steps or by activity labels. Both event paths read this flag so a
+   * batch's tool cards and its header always land in one index space.
+   *
+   * Stamped per event by the resumable transport, which owns the SYNC
+   * boundary; the non-resumable path never sets it.
+   */
+  editPrefixCleared?: boolean;
   /** Added conversation for multi-convo feature */
   addedConvo?: TConversation;
   /** Skills the user invoked via the `$` popover for this submission. */
   manualSkills?: string[];
+  /** Stable per-submission idempotency key (uuid) forwarded to the server to dedup retried start-generation requests. */
+  clientRequestId?: string;
+  /** Client-only carry-through for a receipt-bound queued recovery. */
+  recoverySteerId?: string;
+  /** Optional optimistic-serialization fence for a queued follow-up. The
+   * server may create only if this observed predecessor is still current or
+   * the conversation is still idle after its cleanup. */
+  expectedPredecessorCreatedAt?: number;
+  /** Opaque client-only queue restoration metadata; intentionally omitted by
+   * `createPayload`. */
+  queuedMessageOrigin?: unknown;
 };
 
 export type EventSubmission = Omit<TSubmission, 'initialResponse'> & { initialResponse: TMessage };

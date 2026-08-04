@@ -242,6 +242,15 @@ export type VoiceOptions = {
   onError?: (error: unknown, variables: unknown, context?: unknown) => void;
 };
 
+export type TFilesUsageBody = {
+  file_ids: string[];
+};
+
+export type TFilesUsageResponse = {
+  /** Count of queued uploads whose TTL hold was extended. */
+  held: number;
+};
+
 export type DeleteFilesResponse = {
   message: string;
   result: Record<string, unknown>;
