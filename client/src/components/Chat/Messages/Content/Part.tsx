@@ -20,6 +20,7 @@ import {
   ReadFileCall,
   BashCall,
   SubagentCall,
+  SteerPart,
 } from './Parts';
 import { ErrorMessage } from './MessageContent';
 import RetrievalCall from './RetrievalCall';
@@ -53,6 +54,17 @@ const Part = memo(function Part({
 }: PartProps) {
   if (!part) {
     return null;
+  }
+
+  if (part.type === ContentTypes.STEER) {
+    return (
+      <SteerPart
+        steer={part[ContentTypes.STEER]}
+        files={part.files}
+        steerId={part.steerId}
+        createdAt={part.createdAt}
+      />
+    );
   }
 
   if (part.type === ContentTypes.ERROR) {

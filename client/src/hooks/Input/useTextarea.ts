@@ -11,10 +11,12 @@ import {
   checkIfScrollable,
 } from '~/utils';
 import { useAssistantsMapContext } from '~/Providers/AssistantsMapContext';
+import useComposerBindings from '~/hooks/Input/useComposerBindings';
 import { useAgentsMapContext } from '~/Providers/AgentsMapContext';
 import useGetSender from '~/hooks/Conversations/useGetSender';
 import useFileHandling from '~/hooks/Files/useFileHandling';
 import { useInteractionHealthCheck } from '~/data-provider';
+import { resolveComposerKeyDown } from '~/utils/shortcuts';
 import { useChatContext } from '~/Providers/ChatContext';
 import { useLatestMessage } from '~/hooks/Messages/useLatestMessage';
 import { globalAudioId } from '~/common';
@@ -29,12 +31,19 @@ export default function useTextarea({
   setIsScrollable,
   disabled = false,
   placeholder,
+  allowSubmitWhileGenerating = false,
+  onDuringRunModifier,
 }: {
   textAreaRef: React.RefObject<HTMLTextAreaElement>;
   submitButtonRef: React.RefObject<HTMLButtonElement>;
   setIsScrollable: React.Dispatch<React.SetStateAction<boolean>>;
   disabled?: boolean;
   placeholder?: string;
+  /** Lets Enter submit during a run (during-run steering/queuing routes it). */
+  allowSubmitWhileGenerating?: boolean;
+  /** During-run modifier chords: ⌘/Ctrl+Enter = the non-default action,
+   *  ⌥/Alt+Enter = interrupt & send. Enter itself submits the default. */
+  onDuringRunModifier?: (kind: 'other' | 'interrupt' | 'preempt') => void;
 }) {
   const localize = useLocalize();
   const getSender = useGetSender();
@@ -44,8 +53,9 @@ export default function useTextarea({
   const assistantMap = useAssistantsMapContext();
   const checkHealth = useInteractionHealthCheck();
   const enterToSend = useRecoilValue(store.enterToSend);
+  const { submitOverride, yieldedChords } = useComposerBindings();
 
-  const { index, conversation, isSubmitting, filesLoading, setFilesLoading } = useChatContext();
+  const { index, conversation, isSubmitting, setFilesLoading } = useChatContext();
   const latestMessage = useLatestMessage(index);
   const [activePrompt, setActivePrompt] = useRecoilState(store.activePromptByIndex(index));
 
@@ -152,53 +162,56 @@ export default function useTextarea({
         const scrollable = checkIfScrollable(textAreaRef.current);
         scrollable && setIsScrollable(scrollable);
       }
-      if (e.key === 'Enter' && isSubmitting) {
+      if (e.key === 'Enter' && isSubmitting && !allowSubmitWhileGenerating) {
         return;
       }
 
       checkHealth();
 
-      const isNonShiftEnter = e.key === 'Enter' && !e.shiftKey;
-      const isCtrlEnter = e.key === 'Enter' && (e.ctrlKey || e.metaKey);
-
       // NOTE: isComposing and e.key behave differently in Safari compared to other browsers, forcing us to use e.keyCode instead
       const isComposingInput = isComposing.current || e.key === 'Process' || e.keyCode === 229;
 
-      if (isNonShiftEnter && filesLoading) {
-        e.preventDefault();
-      }
+      const action = resolveComposerKeyDown(e.nativeEvent, {
+        isComposing: isComposingInput,
+        isSubmitting,
+        allowSubmitWhileGenerating,
+        hasDuringRunModifier: onDuringRunModifier != null,
+        enterToSend,
+        submitOverride,
+        yieldedChords,
+      });
 
-      if (isNonShiftEnter) {
-        e.preventDefault();
+      if (action === 'none') {
+        return;
       }
-
-      if (
-        e.key === 'Enter' &&
-        !enterToSend &&
-        !isCtrlEnter &&
-        textAreaRef.current &&
-        !isComposingInput
-      ) {
-        e.preventDefault();
+      e.preventDefault();
+      if (action === 'interrupt' || action === 'preempt' || action === 'other') {
+        onDuringRunModifier?.(action);
+        return;
+      }
+      if (action === 'newline' && textAreaRef.current) {
         insertTextAtCursor(textAreaRef.current, '\n');
         forceResize(textAreaRef.current);
         return;
       }
-
-      if ((isNonShiftEnter || isCtrlEnter) && !isComposingInput) {
-        const globalAudio = document.getElementById(globalAudioId) as HTMLAudioElement | undefined;
-        if (globalAudio) {
-          console.log('Unmuting global audio');
-          globalAudio.muted = false;
-        }
-        submitButtonRef.current?.click();
+      if (action !== 'submit') {
+        return;
       }
+      const globalAudio = document.getElementById(globalAudioId) as HTMLAudioElement | undefined;
+      if (globalAudio) {
+        console.log('Unmuting global audio');
+        globalAudio.muted = false;
+      }
+      submitButtonRef.current?.click();
     },
     [
       isSubmitting,
+      allowSubmitWhileGenerating,
+      onDuringRunModifier,
+      yieldedChords,
       checkHealth,
-      filesLoading,
       enterToSend,
+      submitOverride,
       setIsScrollable,
       textAreaRef,
       submitButtonRef,

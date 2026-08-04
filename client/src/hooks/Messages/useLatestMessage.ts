@@ -1,5 +1,5 @@
 import { useCallback } from 'react';
-import { selectorFamily, useRecoilValue } from 'recoil';
+import { selectorFamily, useRecoilValue, useRecoilCallback } from 'recoil';
 import { useParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Constants, QueryKeys } from 'librechat-data-provider';
@@ -106,6 +106,35 @@ export function useLatestMessage(
   );
 
   return useMessagesCacheSelect(messagesQueryId, select);
+}
+
+/**
+ * Call-time reader for the branch tail: no cache subscription at all, so
+ * callbacks that only need the latest message when invoked keep a stable
+ * identity across streaming deltas.
+ */
+export function useGetLatestMessage(
+  index: string | number,
+  messagesQueryIdOverride?: string | null,
+): () => TMessage | null {
+  const queryClient = useQueryClient();
+  const conversationId = useRecoilValue(store.conversationIdByIndex(index));
+  const messagesQueryId = useLatestMessagesQueryId(index, conversationId, messagesQueryIdOverride);
+
+  return useRecoilCallback(
+    ({ snapshot }) =>
+      (): TMessage | null => {
+        if (!messagesQueryId) {
+          return null;
+        }
+        const messages =
+          queryClient.getQueryData<TMessage[]>([QueryKeys.messages, messagesQueryId]) ?? [];
+        return selectActiveBranchTail(messages, conversationId, (parentId) =>
+          snapshot.getLoadable(store.messagesSiblingIdxFamily(parentId)).getValue(),
+        );
+      },
+    [queryClient, conversationId, messagesQueryId],
+  );
 }
 
 export function useLatestMessageId(
