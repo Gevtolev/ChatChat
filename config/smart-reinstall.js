@@ -28,6 +28,9 @@ const { execSync } = require('child_process');
 
 require('./helpers');
 
+// Opt out of reo-census's install-time analytics (pulled in transitively by @librechat/agents)
+process.env.PACKAGE_TRACKER_ANALYTICS = 'false';
+
 const ROOT_DIR = path.resolve(__dirname, '..');
 const DEPS_HASH_MARKER = path.join(ROOT_DIR, 'node_modules', '.librechat-deps-hash');
 

@@ -6,6 +6,9 @@ const { execSync } = require('child_process');
 
 const { deleteNodeModules } = require('./helpers');
 
+// Opt out of reo-census's install-time analytics (pulled in transitively by @librechat/agents)
+process.env.PACKAGE_TRACKER_ANALYTICS = 'false';
+
 // Set the directories
 const rootDir = path.resolve(__dirname, '..');
 const directories = [

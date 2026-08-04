@@ -11,6 +11,7 @@ permissions:
 env:
   NODE_ENV: CI
   NODE_OPTIONS: '--max-old-space-size=${{ secrets.NODE_MAX_OLD_SPACE_SIZE || 6144 }}'
+  PACKAGE_TRACKER_ANALYTICS: 'false'
 
 jobs:
   build:

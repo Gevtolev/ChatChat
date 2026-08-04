@@ -4,6 +4,9 @@ const path = require('path');
 const { execSync } = require('child_process');
 const { askQuestion, isDockerRunning, deleteNodeModules, silentExit } = require('./helpers');
 
+// Opt out of reo-census's install-time analytics (pulled in transitively by @librechat/agents)
+process.env.PACKAGE_TRACKER_ANALYTICS = 'false';
+
 const config = {
   bun: process.argv.includes('-b'),
   local: process.argv.includes('-l'),

@@ -16,6 +16,9 @@ on:
 permissions:
   contents: read
 
+env:
+  PACKAGE_TRACKER_ANALYTICS: 'false'
+
 jobs:
   pack:
     runs-on: ubuntu-latest
