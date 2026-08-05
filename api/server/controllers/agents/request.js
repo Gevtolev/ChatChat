@@ -8,6 +8,7 @@ const {
   GenerationJobManager,
   decrementPendingRequest,
   isSteerPreemptSupported,
+  buildRecoveredSteerPayload,
   sanitizeMessageForTransmit,
   checkAndIncrementPendingRequest,
 } = require('@librechat/api');
@@ -177,6 +178,11 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
     // fresh randomUUID row on every retry.
     req.body.overrideUserMessageId = `${recoverySteerId}${Constants.COMMON_DIVIDER}0`;
   }
+  // Exact user-visible source proof checked inside GenerationJobManager's
+  // atomic createJob, so the store only leases/consumes the parked item this
+  // request actually reproduces.
+  const recoveredSteerPayload =
+    recoverySteerId != null ? buildRecoveredSteerPayload(text, req.body?.files) : undefined;
 
   const { allowed, pendingRequests, limit } = await checkAndIncrementPendingRequest(userId);
   if (!allowed) {
@@ -274,6 +280,8 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
         idempotencyClaimToken,
       }),
       ...(expectedPredecessorCreatedAt != null && { expectedPredecessorCreatedAt }),
+      ...(recoverySteerId && { recoveredSteerId: recoverySteerId }),
+      ...(recoveredSteerPayload && { recoveredSteerPayload }),
     });
     // The job's own immutable metadata is now the source of truth: this locks
     // the generation to the protocol it was created with for its whole
@@ -282,6 +290,30 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
     generationProtocolVersion = negotiateExistingGenerationProtocol(req, job);
     const jobCreatedAt = job.createdAt; // Capture creation time to detect job replacement
     req._resumableStreamId = streamId;
+
+    let recoveredSteerCommitted = false;
+    // Only consume the parked recovery source once the recovered turn's user
+    // message is durably saved -- losing this call must never lose the only
+    // durable copy of the user's recovered words, so it stays a no-op until
+    // that persistence succeeds (see the call site below).
+    const commitRecoveredSteer = async () => {
+      if (!recoverySteerId || recoveredSteerCommitted) {
+        return;
+      }
+      if (client?.skipSaveUserMessage) {
+        throw new Error('Recovered steer cannot skip user message persistence');
+      }
+      const committed = await GenerationJobManager.steering.consumeRecovered(
+        streamId,
+        recoverySteerId,
+        { userId, tenantId: req.user?.tenantId },
+        jobCreatedAt,
+      );
+      if (!committed) {
+        throw new Error('Recovered steer could not be committed after message persistence');
+      }
+      recoveredSteerCommitted = true;
+    };
 
     // Send JSON response IMMEDIATELY so client can connect to SSE stream
     // This is critical: tool loading (MCP OAuth) may emit events that the client needs to receive
@@ -505,6 +537,7 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
             context: 'api/server/controllers/agents/request.js - resumable user message',
           });
         }
+        await commitRecoveredSteer();
 
         // CRITICAL: Save response message BEFORE emitting final event.
         // This prevents race conditions where the client sends a follow-up message
