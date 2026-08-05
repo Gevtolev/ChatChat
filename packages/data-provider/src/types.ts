@@ -126,6 +126,21 @@ export type TPayload = Partial<TMessage> &
      * before the LLM turn runs.
      */
     manualSkills?: string[];
+    /**
+     * Stable per-submission idempotency key (uuid) generated once per `ask()`. Identical
+     * across the client's start-generation network retries, unique per user action (including
+     * regenerate). The server dedups retried start requests on it so a lost/reset response
+     * cannot trigger a second billed generation.
+     */
+    clientRequestId?: string;
+    /** Parked steer source consumed only after this new turn's user message is
+     * durably saved. Separate from `clientRequestId`, which identifies one
+     * generation attempt and must rotate after a failed recovery. */
+    recoverySteerId?: string;
+    /** Optional optimistic-serialization fence for a queued follow-up. The
+     * server may create only if this observed predecessor is still current or
+     * the conversation is still idle after its cleanup. */
+    expectedPredecessorCreatedAt?: number;
   };
 
 export type TEditedContent =

@@ -16,6 +16,11 @@ const { handleAbortError } = require('~/server/middleware');
 const { logViolation } = require('~/cache');
 const { saveMessage, getConvo } = require('~/models');
 
+/** Mirrors upstream's `CLIENT_REQUEST_ID_PATTERN` - reused for both
+ * `clientRequestId` and `recoverySteerId`, which are both opaque stable ids
+ * minted client-side (uuid or steer id). */
+const CLIENT_REQUEST_ID_PATTERN = /^[A-Za-z0-9:_-]{1,128}$/;
+
 function createCloseHandler(abortController) {
   return function (manual) {
     if (!manual) {
@@ -95,6 +100,51 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
 
   const userId = req.user.id;
 
+  // Idempotency: a lost/reset start-generation response makes the client re-POST the
+  // identical payload, which would otherwise start a second fully-billed generation.
+  // Validate the three client-supplied correlation fields up front, before the
+  // concurrency check, so a malformed retry never consumes a pending-request slot.
+  const clientRequestId = req.body?.clientRequestId;
+  if (
+    clientRequestId != null &&
+    (typeof clientRequestId !== 'string' || !CLIENT_REQUEST_ID_PATTERN.test(clientRequestId))
+  ) {
+    return res.status(400).json({
+      code: 'INVALID_CLIENT_REQUEST_ID',
+      error: 'clientRequestId must be a 1-128 character identifier.',
+    });
+  }
+
+  const expectedPredecessorCreatedAt = req.body?.expectedPredecessorCreatedAt;
+  if (
+    expectedPredecessorCreatedAt != null &&
+    (!Number.isSafeInteger(expectedPredecessorCreatedAt) || expectedPredecessorCreatedAt < 0)
+  ) {
+    return res.status(400).json({
+      code: 'INVALID_GENERATION_PREDECESSOR',
+      error: 'expectedPredecessorCreatedAt must be a non-negative safe integer.',
+    });
+  }
+
+  const recoverySteerId = req.body?.recoverySteerId;
+  if (
+    recoverySteerId != null &&
+    (typeof recoverySteerId !== 'string' || !CLIENT_REQUEST_ID_PATTERN.test(recoverySteerId))
+  ) {
+    return res.status(400).json({
+      code: 'INVALID_RECOVERY_REQUEST',
+      error: 'recoverySteerId must be a 1-128 character identifier.',
+    });
+  }
+  if (recoverySteerId != null && req.body.overrideUserMessageId === recoverySteerId) {
+    // BaseClient's processOverideIds() treats a bare id (no COMMON_DIVIDER) as
+    // already-persisted and skips saving it. Appending the save-index-0
+    // suffix makes the recovered turn's user message actually get saved, as
+    // an idempotent upsert into the recovered steer's own row rather than a
+    // fresh randomUUID row on every retry.
+    req.body.overrideUserMessageId = `${recoverySteerId}${Constants.COMMON_DIVIDER}0`;
+  }
+
   const { allowed, pendingRequests, limit } = await checkAndIncrementPendingRequest(userId);
   if (!allowed) {
     const violationInfo = getViolationInfo(pendingRequests, limit);
@@ -108,6 +158,49 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
   const conversationId = isNewConvo ? crypto.randomUUID() : reqConversationId;
   const streamId = conversationId;
   req.body.conversationId = conversationId;
+
+  // Only existing conversations get a deduped claim: streamId === conversationId is
+  // stable across retries there, but a new conversation mints a fresh random streamId
+  // per attempt (no upstream-style deterministic derivation from clientRequestId in
+  // this fork), which would make a genuine retry's claim coordinates mismatch the
+  // first attempt's and fail closed inside `claimGeneration`.
+  let idempotencyClaimToken;
+  if (clientRequestId && !isNewConvo) {
+    try {
+      const claim = await GenerationJobManager.claimGeneration(
+        userId,
+        clientRequestId,
+        streamId,
+        conversationId,
+      );
+      if (claim.claimed) {
+        idempotencyClaimToken = claim.existing?.claimToken;
+      } else if (claim.existing?.startedAt != null) {
+        // Confirmed duplicate of an already-started generation: attach the
+        // retry to that same stream/epoch instead of starting a second
+        // billed run. A duplicate observed before the winner finishes
+        // `createJob` (`startedAt` still null) falls through and starts a
+        // normal, un-deduped job rather than risk a false short-circuit.
+        logger.debug('[ResumableAgentController] Deduped retried start-generation request', {
+          userId,
+          clientRequestId,
+          streamId: claim.existing.streamId,
+        });
+        await decrementPendingRequest(userId);
+        return res.json({
+          streamId: claim.existing.streamId,
+          conversationId: claim.existing.conversationId,
+          generationCreatedAt: claim.existing.startedAt,
+          status: 'started',
+        });
+      }
+    } catch (error) {
+      logger.warn(
+        '[ResumableAgentController] Generation idempotency claim failed; proceeding without dedup',
+        { streamId, error: error?.message ?? error },
+      );
+    }
+  }
 
   let client = null;
 
@@ -131,6 +224,11 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
         // answer for the wrong process during a rolling deploy.
         preemptCapable: isSteerPreemptSupported(),
       },
+      ...(idempotencyClaimToken && {
+        idempotencyClientRequestId: clientRequestId,
+        idempotencyClaimToken,
+      }),
+      ...(expectedPredecessorCreatedAt != null && { expectedPredecessorCreatedAt }),
     });
     const jobCreatedAt = job.createdAt; // Capture creation time to detect job replacement
     req._resumableStreamId = streamId;
@@ -486,7 +584,25 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
   } catch (error) {
     logger.error('[ResumableAgentController] Initialization error:', error);
     if (!res.headersSent) {
-      res.status(500).json({ error: error.message || 'Failed to start generation' });
+      if (error?.code === 'GENERATION_PREDECESSOR_MISMATCH') {
+        // expectedPredecessorCreatedAt no longer matches the stream's current
+        // generation. Report the observed state so the client can retarget
+        // its queued follow-up at the actual current/replacement generation
+        // instead of silently dropping it (see useResumableSSE.ts's
+        // predecessor-mismatch handling, already implemented and tested).
+        const currentJob = error.currentJob;
+        res.status(409).json({
+          status: 'predecessor_mismatch',
+          code: 'GENERATION_PREDECESSOR_MISMATCH',
+          error: 'A newer generation became current before this request could start.',
+          streamId,
+          conversationId: currentJob?.conversationId ?? conversationId,
+          generationCreatedAt: currentJob?.createdAt,
+          active: currentJob?.active === true,
+        });
+      } else {
+        res.status(500).json({ error: error.message || 'Failed to start generation' });
+      }
     } else {
       // JSON already sent, emit error to stream so client can receive it
       await GenerationJobManager.emitError(streamId, error.message || 'Failed to start generation');

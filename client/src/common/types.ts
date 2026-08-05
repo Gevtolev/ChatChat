@@ -359,6 +359,14 @@ export type TOptions = {
   overrideManualSkills?: string[];
   /** Added conversation for multi-convo feature - sent to server as part of submission payload */
   addedConvo?: t.TConversation;
+  /** Reuse a durable submission identity (terminal steer recovery). */
+  overrideClientRequestId?: string;
+  /** Exact parked steer source for a recovery attempt. */
+  overrideRecoverySteerId?: string;
+  /** Exact terminal generation observed before an automatic queued start. */
+  overrideExpectedPredecessorCreatedAt?: number;
+  /** Client-only exact queue position restored if admission is rejected. */
+  overrideQueuedMessageOrigin?: unknown;
 };
 
 export type TAskFunction = (props: TAskProps, options?: TOptions) => boolean | void;

@@ -181,6 +181,10 @@ const ChatForm = memo(function ChatForm({
         text,
         overrideFiles,
         overrideManualSkills: context?.manualSkills ?? [],
+        overrideClientRequestId: context?.clientRequestId,
+        overrideRecoverySteerId: context?.recoverySteerId,
+        overrideExpectedPredecessorCreatedAt: context?.expectedPredecessorCreatedAt,
+        overrideQueuedMessageOrigin: context?.queuedMessageOrigin,
       }),
     [submitMessage],
   );

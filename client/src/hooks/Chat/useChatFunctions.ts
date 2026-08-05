@@ -121,6 +121,10 @@ export default function useChatFunctions({
       overrideFiles,
       overrideManualSkills,
       addedConvo,
+      overrideClientRequestId,
+      overrideRecoverySteerId,
+      overrideExpectedPredecessorCreatedAt,
+      overrideQueuedMessageOrigin,
     } = {},
   ) => {
     text = text.trim();
@@ -219,6 +223,10 @@ export default function useChatFunctions({
     // construct the query message
     // this is not a real messageId, it is used as placeholder before real messageId returned
     const intermediateId = overrideUserMessageId ?? v4();
+    /** Stable idempotency key for this submission: fresh per `ask()` (so regenerate differs)
+     *  but reused across the client's start-generation network retries, letting the server
+     *  dedup a retried request instead of starting a second billed generation. */
+    const clientRequestId = overrideClientRequestId ?? v4();
     parentMessageId = parentMessageId ?? latestMessage?.messageId ?? Constants.NO_PARENT;
 
     logChatRequest({
@@ -434,6 +442,10 @@ export default function useChatFunctions({
       editedContent,
       addedConvo,
       manualSkills: manualSkills.length > 0 ? manualSkills : undefined,
+      clientRequestId,
+      recoverySteerId: overrideRecoverySteerId,
+      expectedPredecessorCreatedAt: overrideExpectedPredecessorCreatedAt,
+      queuedMessageOrigin: overrideQueuedMessageOrigin,
     };
 
     if (isRegenerate) {
