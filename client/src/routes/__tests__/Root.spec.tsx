@@ -1,8 +1,10 @@
 import React from 'react';
 import { RecoilRoot, useRecoilValue } from 'recoil';
-import { render, screen, act, cleanup } from '@testing-library/react';
+import { render, screen, act, cleanup, fireEvent } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createMemoryRouter, RouterProvider } from 'react-router-dom';
+import type { TConversation } from 'librechat-data-provider';
+import type { MutableSnapshot } from 'recoil';
 import Root from '~/routes/Root';
 import { mainTextareaId } from '~/common';
 import store from '~/store';
@@ -46,6 +48,7 @@ jest.mock('~/hooks', () => ({
   useSearchEnabled: () => undefined,
   useLocalize: () => (key: string) => key,
   useHasAccess: () => false,
+  useNewConvo: () => ({ newConversation: jest.fn() }),
 }));
 
 jest.mock('~/data-provider', () => ({
@@ -53,6 +56,7 @@ jest.mock('~/data-provider', () => ({
   useUserTermsQuery: () => ({ data: undefined }),
   useHealthCheck: () => undefined,
   useArchiveConvoMutation: () => ({ mutate: jest.fn(), isLoading: false }),
+  useDeleteConversationMutation: () => ({ mutate: jest.fn(), isLoading: false }),
 }));
 
 jest.mock('~/Providers', () => ({
@@ -88,27 +92,34 @@ function SidebarProbe() {
   return <output data-testid="sidebar-expanded">{String(sidebarExpanded)}</output>;
 }
 
-function renderRoot() {
+function renderRoot(route = '/', initialize?: (snapshot: MutableSnapshot) => void) {
   const queryClient = new QueryClient();
   const router = createMemoryRouter(
     [
       {
         path: '/',
         element: <Root />,
-        children: [{ index: true, element: <ChatArea /> }],
+        children: [
+          { index: true, element: <ChatArea /> },
+          { path: 'c/:conversationId', element: <ChatArea /> },
+        ],
       },
     ],
-    { initialEntries: ['/'] },
+    { initialEntries: [route] },
   );
 
   return render(
-    <RecoilRoot>
+    <RecoilRoot initializeState={initialize}>
       <QueryClientProvider client={queryClient}>
         <SidebarProbe />
         <RouterProvider router={router} />
       </QueryClientProvider>
     </RecoilRoot>,
   );
+}
+
+function buildConversation(conversationId: string, title: string): TConversation {
+  return { conversationId, title, endpoint: 'agents' } as TConversation;
 }
 
 function dispatchOn(target: EventTarget, init: KeyboardEventInit): KeyboardEvent {
@@ -197,5 +208,34 @@ describe('Root — keyboard shortcuts mount', () => {
     dispatchOn(textarea, { key: 'S', ctrlKey: true, shiftKey: true });
 
     expect(screen.getByTestId('sidebar-expanded')).toHaveTextContent('true');
+  });
+});
+
+describe('Root — keyboard delete dialog', () => {
+  it('opens the real delete confirmation dialog on Ctrl+Shift+Backspace instead of leaving keyboardDeleteTarget unconsumed', () => {
+    const conversation = buildConversation('convo-1', 'My Chat');
+    renderRoot('/c/convo-1', (snapshot) => {
+      snapshot.set(store.conversationByIndex(0), conversation);
+    });
+
+    expect(screen.queryByText('com_ui_delete_conversation')).not.toBeInTheDocument();
+
+    dispatchOn(document.body, { key: 'Backspace', ctrlKey: true, shiftKey: true });
+
+    expect(screen.getByText('com_ui_delete_conversation')).toBeInTheDocument();
+  });
+
+  it('clears keyboardDeleteTarget and closes the dialog on cancel', () => {
+    const conversation = buildConversation('convo-1', 'My Chat');
+    renderRoot('/c/convo-1', (snapshot) => {
+      snapshot.set(store.conversationByIndex(0), conversation);
+    });
+
+    dispatchOn(document.body, { key: 'Backspace', ctrlKey: true, shiftKey: true });
+    expect(screen.getByText('com_ui_delete_conversation')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'cancel' }));
+
+    expect(screen.queryByText('com_ui_delete_conversation')).not.toBeInTheDocument();
   });
 });
