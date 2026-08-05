@@ -12,6 +12,12 @@ const {
   messageUserLimiter,
 } = require('~/server/middleware');
 const SteerController = require('~/server/controllers/agents/steer');
+const {
+  GENERATION_PROTOCOL_HEADER,
+  getRequestedGenerationProtocol,
+  getServerGenerationProtocol,
+  negotiateExistingGenerationProtocol,
+} = require('~/server/controllers/agents/protocol');
 const { saveMessage } = require('~/models');
 const responses = require('./responses');
 const openai = require('./openai');
@@ -23,6 +29,40 @@ const { LIMIT_MESSAGE_IP, LIMIT_MESSAGE_USER } = process.env ?? {};
 /** Untenanted jobs (pre-multi-tenancy) remain accessible if the userId check passes. */
 function hasTenantMismatch(job, user) {
   return job.metadata?.tenantId != null && job.metadata.tenantId !== user.tenantId;
+}
+
+/**
+ * Status envelope for a conversation whose job record is already gone. The
+ * default completeJob path deletes it immediately, so this IS the common
+ * after-terminal case — parked steers live under their own bounded-TTL key and
+ * authorize from their stored owner.
+ *
+ * The numeric protocol echo is load-bearing: a v2 client is fail-closed and
+ * treats an unmarked snapshot as unusable, re-subscribing to the finished
+ * generation until the marker proves the server speaks its protocol.
+ */
+async function sendJoblessStatus(req, res, conversationId) {
+  const requestedProtocolVersion = getRequestedGenerationProtocol(req);
+  const claimed = await GenerationJobManager.steering.claimDetailed(
+    conversationId,
+    {
+      userId: req.user.id,
+      tenantId: req.user.tenantId,
+    },
+    requestedProtocolVersion,
+  );
+  const generationProtocolVersion = Math.min(
+    requestedProtocolVersion,
+    claimed.steers.length > 0
+      ? claimed.generationProtocolVersion
+      : getServerGenerationProtocol(GenerationJobManager),
+  );
+  res.set(GENERATION_PROTOCOL_HEADER, String(generationProtocolVersion));
+  return res.json({
+    active: false,
+    generationProtocolVersion,
+    ...(claimed.steers.length > 0 && { unrecoveredSteers: claimed.steers }),
+  });
 }
 
 const router = express.Router();
@@ -187,17 +227,7 @@ router.get('/chat/status/:conversationId', async (req, res) => {
   const job = await GenerationJobManager.getJob(conversationId);
 
   if (!job) {
-    // The default completeJob path deletes the job record immediately, so
-    // this IS the common reload-after-terminal case — recover any steer that
-    // was still queued when the run ended without crossing a drain boundary.
-    const claimed = await GenerationJobManager.steering.claimDetailed(conversationId, {
-      userId: req.user.id,
-      tenantId: req.user.tenantId,
-    });
-    return res.json({
-      active: false,
-      ...(claimed.steers.length > 0 && { unrecoveredSteers: claimed.steers }),
-    });
+    return sendJoblessStatus(req, res, conversationId);
   }
 
   if (job.metadata.userId !== req.user.id) {
@@ -213,19 +243,34 @@ router.get('/chat/status/:conversationId', async (req, res) => {
   const resumeState = await GenerationJobManager.getResumeState(conversationId);
   const isActive = job.status === 'running';
 
+  /** A job never changes protocol mid-flight: the epoch it was created with
+   * governs every later read, even if the server-wide capability moves. */
+  let generationProtocolVersion = negotiateExistingGenerationProtocol(req, job);
+  res.set(GENERATION_PROTOCOL_HEADER, String(generationProtocolVersion));
+
   let unrecoveredSteers;
   if (!isActive || job.metadata.steersClosed === true) {
-    const claimed = await GenerationJobManager.steering.claimDetailed(conversationId, {
-      userId: req.user.id,
-      tenantId: req.user.tenantId,
-    });
+    const claimed = await GenerationJobManager.steering.claimDetailed(
+      conversationId,
+      {
+        userId: req.user.id,
+        tenantId: req.user.tenantId,
+      },
+      getRequestedGenerationProtocol(req),
+    );
     if (claimed.steers.length > 0) {
+      generationProtocolVersion = Math.min(
+        generationProtocolVersion,
+        claimed.generationProtocolVersion,
+      );
+      res.set(GENERATION_PROTOCOL_HEADER, String(generationProtocolVersion));
       unrecoveredSteers = claimed.steers;
     }
   }
 
   res.json({
     active: isActive,
+    generationProtocolVersion,
     streamId: conversationId,
     status: job.status,
     aggregatedContent: resumeState?.aggregatedContent ?? [],
