@@ -119,6 +119,8 @@ router.get('/chat/stream/:streamId', async (req, res) => {
     return res.status(403).json({ error: 'Unauthorized' });
   }
 
+  const generationProtocolVersion = negotiateExistingGenerationProtocol(req, job);
+
   const streamTelemetry = createSseStreamTelemetry({ req, res, streamId, isResume });
 
   res.setHeader('Content-Encoding', 'identity');
@@ -126,6 +128,7 @@ router.get('/chat/stream/:streamId', async (req, res) => {
   res.setHeader('Cache-Control', 'no-cache, no-transform');
   res.setHeader('Connection', 'keep-alive');
   res.setHeader('X-Accel-Buffering', 'no');
+  res.setHeader(GENERATION_PROTOCOL_HEADER, String(generationProtocolVersion));
   res.flushHeaders();
   streamTelemetry.recordHeadersFlushed();
 
@@ -148,14 +151,19 @@ router.get('/chat/stream/:streamId', async (req, res) => {
 
   const onDone = (event) => {
     streamTelemetry.recordFinalEventEmitted();
-    writeEvent(event, { final: true });
+    writeEvent(
+      event != null && typeof event === 'object'
+        ? { ...event, generationProtocolVersion }
+        : { final: true, generationProtocolVersion },
+      { final: true },
+    );
     res.end();
   };
 
   const onError = (error) => {
     if (!res.writableEnded) {
       streamTelemetry.recordErrorEventEmitted();
-      writeEvent({ error }, { eventName: 'error' });
+      writeEvent({ error, generationProtocolVersion }, { eventName: 'error' });
       res.end();
     }
   };
@@ -328,6 +336,8 @@ router.post('/chat/abort', async (req, res) => {
       return res.status(403).json({ error: 'Unauthorized' });
     }
 
+    const generationProtocolVersion = negotiateExistingGenerationProtocol(req, job);
+
     logger.debug(`[AgentStream] Job found, aborting: ${jobStreamId}`);
     const abortResult = await GenerationJobManager.abortJob(jobStreamId);
     logger.debug(`[AgentStream] Job aborted successfully: ${jobStreamId}`, {
@@ -376,7 +386,12 @@ router.post('/chat/abort', async (req, res) => {
       }
     }
 
-    return res.json({ success: true, aborted: jobStreamId });
+    return res.json({
+      success: true,
+      aborted: jobStreamId,
+      generationProtocolVersion,
+      ...(abortResult.pendingSteers?.length > 0 && { pendingSteers: abortResult.pendingSteers }),
+    });
   }
 
   logger.warn(`[AgentStream] Job not found for streamId: ${jobStreamId}`);
