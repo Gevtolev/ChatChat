@@ -795,3 +795,49 @@ EOF
 - **Task 6 结束后** —— 前后端基座全部对齐，steer 后端可用但前端无入口。**不建议**停在这里对外发布（用户看不到功能却承担了全部回归风险），但作为一个可评审的中间点是合理的。
 
 Task 7–9 必须连续完成，中途停下会留下半截 UI。
+
+---
+
+## Task 11: `useChatHelpers` abort 链（前端）
+
+> **2026-08-05 新增**，决策者要求补齐。端到端实测坐实：Alt+Enter（interrupt-and-send）只完成了"打断"，"发送"那一半断掉——文字变成挂着的 chip 等人手点 "Send now"。根因是 `client/src/hooks/Chat/useChatHelpers.ts` 与上游差 **203 行**，缺失部分正是 abort 后的 steer 回收链。
+
+**缺失清单**（对拍 `git diff HEAD:client/src/hooks/Chat/useChatHelpers.ts upstream/dev:client/src/hooks/Chat/useChatHelpers.ts` 确认）：
+- `client/src/hooks/Chat/abort.ts` 与 `useAbortCleanup`（约 36 行）
+- `signalInterruptDrain` / `clearInterruptDrain`
+- `stopGenerating` 里的 epoch 守卫
+- 从 abort 响应中回收 `pendingSteers` 的整段逻辑
+- 上游自带 `client/src/hooks/Chat/__tests__/abort.spec.tsx`（464 行）
+
+**验收**：Alt+Enter 在生成中触发后，文字应作为新一轮**自动发出**（而非停在 chip）；Ctrl+Shift+Enter（interruptSteer）同理。**必须补一个能复现当前缺陷的测试**——先红后绿，并回退验证红是真红。
+
+---
+
+## Task 12: `/api/files/usage` 路由与 `extendFilesTTL`（后端）
+
+> **2026-08-05 新增**。前端 `useMarkQueuedFilesUsage` 已就绪但被 `filesUsageBackendAvailable = false` 常量短路（Task 6 修复轮所加），因为该路由不存在。
+
+**两个必须一起做的部分**：
+1. `POST /api/files/usage` 路由 + `extendFilesTTL` 实现（对拍上游 `handleFilesUsageRequest`）
+2. 落地后**删除** `client/src/hooks/Chat/useSteering.ts` 的 `filesUsageBackendAvailable` 短路常量，并把 `useSteering.spec.tsx` 里那两条断言**改回**期望恰好一次 `markFilesUsage` 调用（当前断言为 `not.toHaveBeenCalled()`，注释里已写明恢复方法）
+
+**背景**：本 fork `packages/data-schemas/src/schema/file.ts` 有 `expiresAt` + `expires: 3600`（Mongo TTL 1 小时）。不补则排队消息的附件超过 1 小时会被回收，消息带着悬空 file 引用发出。另注意 `api/server/routes/files/index.js` 对该路径下所有 POST 套了限流。
+
+---
+
+## Task 13: 三个 override 字段的端到端打通（前后端）
+
+> **2026-08-05 新增**。Task 8 采用 B 方案时**故意**没透传 `clientRequestId` / `recoverySteerId` / `expectedPredecessorCreatedAt`，因为消费端在后端而后端从不读。现在两端一起补。**只做后端或只做前端都无意义，必须一起。**
+
+- **后端**：`api/server/controllers/agents/request.js` 读 `req.body` 的这三个字段。**下游基础设施已就绪**——`packages/api/src/stream/GenerationJobManager.ts` 的 `generationClaimKey` / `legacyGenerationClaimKey` 等幂等设施是 Task 2 升 SDK 时白捡的，只差读取这几行。
+- **前端**：`ChatForm.tsx` 的 `sendNow` 目前只转发 `manualSkills`，其余静默丢弃；`useChatFunctions.ts` 的 `ask()` 需按上游把 `recoverySteerId` 转成 `overrideUserMessageId`（该字段在 `TAskProps` 上已存在）。
+
+**收益**：排队/回收发送获得幂等去重（避免网络重试产生重复消息）与正确的续投语义。**当前缺失导致的具体故障**：恢复态队列消息二次发送失败时，`useResumableSSE.ts:2731-2757` 的恢复分支因 `submission.recoverySteerId` 恒 undefined 而永不进入，**用户文本静默丢失**。
+
+---
+
+## Task 14: `KeyboardDeleteDialog`（前端）
+
+> **2026-08-05 新增**。Task 9 已移植 `KeyboardShortcutsDialog`/`ShortcutRecorder`/`ShortcutKeyCombo`，唯独这个未移植——真实阻塞是本 fork `DeleteButton.tsx` 的 `DeleteButtonProps` 缺 `currentConversationId`（上游有），逐字节搬运会触发 TS 多余属性检查报错。
+
+需要：给 `DeleteButton.tsx` 加该 prop 并透传进 `DeleteConversationDialog`，再移植 `KeyboardDeleteDialog.tsx`（34 行）并在 `Root.tsx` 的 `KeyboardShortcutsProvider` 中渲染。完成后 `keyboardDeleteTarget` atom 才有消费方（当前写入后永无消费者）。同时更新 `Root.tsx` 那段 JSDoc。
