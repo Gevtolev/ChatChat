@@ -18,6 +18,9 @@ on:
 permissions:
   contents: read
 
+env:
+  PACKAGE_TRACKER_ANALYTICS: 'false'
+
 jobs:
   cache_integration_tests:
     name: Integration Tests that use actual Redis Cache

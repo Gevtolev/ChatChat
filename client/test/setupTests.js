@@ -2,6 +2,17 @@
  * https://create-react-app.dev/docs/running-tests/#initializing-test-environment
  */
 
+// jsdom does not provide TextEncoder/TextDecoder globally, but code under
+// test (e.g. draft base64 encoding) relies on them being available.
+import { TextEncoder, TextDecoder } from 'util';
+
+if (typeof global.TextEncoder === 'undefined') {
+  global.TextEncoder = TextEncoder;
+}
+if (typeof global.TextDecoder === 'undefined') {
+  global.TextDecoder = TextDecoder;
+}
+
 // react-testing-library renders your components to document.body,
 // this adds jest-dom's custom assertions
 // https://github.com/testing-library/jest-dom#table-of-contents

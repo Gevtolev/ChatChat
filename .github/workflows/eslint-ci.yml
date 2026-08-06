@@ -13,6 +13,9 @@ on:
       - 'packages/**'
       - '.github/workflows/eslint-ci.yml'
 
+env:
+  PACKAGE_TRACKER_ANALYTICS: 'false'
+
 jobs:
   eslint_checks:
     name: Run ESLint Linting

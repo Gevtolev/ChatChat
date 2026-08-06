@@ -19,6 +19,9 @@ ARG NODE_MAX_OLD_SPACE_SIZE=6144
 ARG NPM_CI_TIMEOUT_SECONDS=1500
 ARG NPM_CI_ATTEMPTS=2
 
+# Opt out of reo-census's install-time analytics (pulled in transitively by @librechat/agents)
+ENV PACKAGE_TRACKER_ANALYTICS=false
+
 RUN mkdir -p /app && chown node:node /app
 WORKDIR /app
 

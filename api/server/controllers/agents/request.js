@@ -2,10 +2,12 @@ const { logger } = require('@librechat/data-schemas');
 const { Constants, ViolationTypes } = require('librechat-data-provider');
 const {
   sendEvent,
+  toPendingSteer,
   getViolationInfo,
   buildMessageFiles,
   GenerationJobManager,
   decrementPendingRequest,
+  isSteerPreemptSupported,
   sanitizeMessageForTransmit,
   checkAndIncrementPendingRequest,
 } = require('@librechat/api');
@@ -13,6 +15,11 @@ const { disposeClient, clientRegistry, requestDataMap } = require('~/server/clea
 const { handleAbortError } = require('~/server/middleware');
 const { logViolation } = require('~/cache');
 const { saveMessage, getConvo } = require('~/models');
+
+/** Mirrors upstream's `CLIENT_REQUEST_ID_PATTERN` - reused for both
+ * `clientRequestId` and `recoverySteerId`, which are both opaque stable ids
+ * minted client-side (uuid or steer id). */
+const CLIENT_REQUEST_ID_PATTERN = /^[A-Za-z0-9:_-]{1,128}$/;
 
 function createCloseHandler(abortController) {
   return function (manual) {
@@ -93,6 +100,51 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
 
   const userId = req.user.id;
 
+  // Idempotency: a lost/reset start-generation response makes the client re-POST the
+  // identical payload, which would otherwise start a second fully-billed generation.
+  // Validate the three client-supplied correlation fields up front, before the
+  // concurrency check, so a malformed retry never consumes a pending-request slot.
+  const clientRequestId = req.body?.clientRequestId;
+  if (
+    clientRequestId != null &&
+    (typeof clientRequestId !== 'string' || !CLIENT_REQUEST_ID_PATTERN.test(clientRequestId))
+  ) {
+    return res.status(400).json({
+      code: 'INVALID_CLIENT_REQUEST_ID',
+      error: 'clientRequestId must be a 1-128 character identifier.',
+    });
+  }
+
+  const expectedPredecessorCreatedAt = req.body?.expectedPredecessorCreatedAt;
+  if (
+    expectedPredecessorCreatedAt != null &&
+    (!Number.isSafeInteger(expectedPredecessorCreatedAt) || expectedPredecessorCreatedAt < 0)
+  ) {
+    return res.status(400).json({
+      code: 'INVALID_GENERATION_PREDECESSOR',
+      error: 'expectedPredecessorCreatedAt must be a non-negative safe integer.',
+    });
+  }
+
+  const recoverySteerId = req.body?.recoverySteerId;
+  if (
+    recoverySteerId != null &&
+    (typeof recoverySteerId !== 'string' || !CLIENT_REQUEST_ID_PATTERN.test(recoverySteerId))
+  ) {
+    return res.status(400).json({
+      code: 'INVALID_RECOVERY_REQUEST',
+      error: 'recoverySteerId must be a 1-128 character identifier.',
+    });
+  }
+  if (recoverySteerId != null && req.body.overrideUserMessageId === recoverySteerId) {
+    // BaseClient's processOverideIds() treats a bare id (no COMMON_DIVIDER) as
+    // already-persisted and skips saving it. Appending the save-index-0
+    // suffix makes the recovered turn's user message actually get saved, as
+    // an idempotent upsert into the recovered steer's own row rather than a
+    // fresh randomUUID row on every retry.
+    req.body.overrideUserMessageId = `${recoverySteerId}${Constants.COMMON_DIVIDER}0`;
+  }
+
   const { allowed, pendingRequests, limit } = await checkAndIncrementPendingRequest(userId);
   if (!allowed) {
     const violationInfo = getViolationInfo(pendingRequests, limit);
@@ -107,6 +159,49 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
   const streamId = conversationId;
   req.body.conversationId = conversationId;
 
+  // Only existing conversations get a deduped claim: streamId === conversationId is
+  // stable across retries there, but a new conversation mints a fresh random streamId
+  // per attempt (no upstream-style deterministic derivation from clientRequestId in
+  // this fork), which would make a genuine retry's claim coordinates mismatch the
+  // first attempt's and fail closed inside `claimGeneration`.
+  let idempotencyClaimToken;
+  if (clientRequestId && !isNewConvo) {
+    try {
+      const claim = await GenerationJobManager.claimGeneration(
+        userId,
+        clientRequestId,
+        streamId,
+        conversationId,
+      );
+      if (claim.claimed) {
+        idempotencyClaimToken = claim.existing?.claimToken;
+      } else if (claim.existing?.startedAt != null) {
+        // Confirmed duplicate of an already-started generation: attach the
+        // retry to that same stream/epoch instead of starting a second
+        // billed run. A duplicate observed before the winner finishes
+        // `createJob` (`startedAt` still null) falls through and starts a
+        // normal, un-deduped job rather than risk a false short-circuit.
+        logger.debug('[ResumableAgentController] Deduped retried start-generation request', {
+          userId,
+          clientRequestId,
+          streamId: claim.existing.streamId,
+        });
+        await decrementPendingRequest(userId);
+        return res.json({
+          streamId: claim.existing.streamId,
+          conversationId: claim.existing.conversationId,
+          generationCreatedAt: claim.existing.startedAt,
+          status: 'started',
+        });
+      }
+    } catch (error) {
+      logger.warn(
+        '[ResumableAgentController] Generation idempotency claim failed; proceeding without dedup',
+        { streamId, error: error?.message ?? error },
+      );
+    }
+  }
+
   let client = null;
 
   try {
@@ -117,13 +212,30 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
       userId,
     });
 
-    const job = await GenerationJobManager.createJob(streamId, userId, conversationId);
+    const job = await GenerationJobManager.createJob(streamId, userId, conversationId, {
+      initialMetadata: {
+        endpoint: endpointOption.endpoint,
+        // Persist the originating agent so steer-time ACL checks (steer.js's
+        // createAgentAccessCheck) can authorize against the run's actual
+        // identity instead of trusting the steer request body.
+        agent_id: endpointOption.agent_id ?? req.body?.agent_id,
+        // Recorded here because this process owns the generation: the steer
+        // route may land on a different replica whose own SDK probe would
+        // answer for the wrong process during a rolling deploy.
+        preemptCapable: isSteerPreemptSupported(),
+      },
+      ...(idempotencyClaimToken && {
+        idempotencyClientRequestId: clientRequestId,
+        idempotencyClaimToken,
+      }),
+      ...(expectedPredecessorCreatedAt != null && { expectedPredecessorCreatedAt }),
+    });
     const jobCreatedAt = job.createdAt; // Capture creation time to detect job replacement
     req._resumableStreamId = streamId;
 
     // Send JSON response IMMEDIATELY so client can connect to SSE stream
     // This is critical: tool loading (MCP OAuth) may emit events that the client needs to receive
-    res.json({ streamId, conversationId, status: 'started' });
+    res.json({ streamId, conversationId, generationCreatedAt: jobCreatedAt, status: 'started' });
 
     await attachConversationCreatedAt(req, { userId, conversationId, isNewConvo });
 
@@ -212,6 +324,12 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
     }
 
     client = result.client;
+
+    // Tag the client with THIS generation's identity so steer-time durability
+    // (emitChunk's expectedCreatedAt, the store's atomic drain/arm guards) can
+    // tell whether a newer request has since replaced this job on the same
+    // conversationId before acting on it.
+    client.jobCreatedAt = jobCreatedAt;
 
     if (client?.sender) {
       GenerationJobManager.updateMetadata(streamId, { sender: client.sender });
@@ -344,21 +462,29 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
           );
         }
 
-        // Check if our job was replaced by a new request before emitting
-        // This prevents stale requests from emitting events to newer jobs
-        const currentJob = await GenerationJobManager.getJob(streamId);
-        const jobWasReplaced = !currentJob || currentJob.createdAt !== jobCreatedAt;
+        // Atomically win terminal ownership for this exact job epoch and
+        // collect any steer still queued when the run ended without ever
+        // crossing a PostToolBatch/PreemptBoundary drain point. This replaces
+        // the old getJob+compare check: claimTerminalJob fences on
+        // jobCreatedAt itself and returns null for a replaced/stolen job.
+        const terminalClaim = await GenerationJobManager.claimTerminalJob(
+          streamId,
+          wasAbortedBeforeComplete ? 'error' : 'complete',
+          wasAbortedBeforeComplete ? 'Request aborted' : undefined,
+          jobCreatedAt,
+        );
 
-        if (jobWasReplaced) {
+        if (!terminalClaim) {
           logger.debug(`[ResumableAgentController] Skipping FINAL emit - job was replaced`, {
             streamId,
             originalCreatedAt: jobCreatedAt,
-            currentCreatedAt: currentJob?.createdAt,
           });
           // Still decrement pending request since we incremented at start
           await decrementPendingRequest(userId);
           return;
         }
+
+        const pendingSteers = terminalClaim.drainedSteers.map(toPendingSteer);
 
         if (!wasAbortedBeforeComplete) {
           const finalEvent = {
@@ -367,6 +493,7 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
             title: conversation.title,
             requestMessage: sanitizeMessageForTransmit(userMessage),
             responseMessage: { ...response },
+            ...(pendingSteers.length > 0 && { pendingSteers }),
           };
 
           logger.debug(`[ResumableAgentController] Emitting FINAL event`, {
@@ -378,7 +505,7 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
           });
 
           await GenerationJobManager.emitDone(streamId, finalEvent);
-          GenerationJobManager.completeJob(streamId);
+          await GenerationJobManager.finishTerminalJob(terminalClaim);
           await decrementPendingRequest(userId);
         } else {
           const finalEvent = {
@@ -387,6 +514,7 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
             title: conversation.title,
             requestMessage: sanitizeMessageForTransmit(userMessage),
             responseMessage: { ...response, unfinished: true },
+            ...(pendingSteers.length > 0 && { pendingSteers }),
           };
 
           logger.debug(`[ResumableAgentController] Emitting ABORTED FINAL event`, {
@@ -398,7 +526,7 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
           });
 
           await GenerationJobManager.emitDone(streamId, finalEvent);
-          GenerationJobManager.completeJob(streamId, 'Request aborted');
+          await GenerationJobManager.finishTerminalJob(terminalClaim);
           await decrementPendingRequest(userId);
         }
 
@@ -456,7 +584,25 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
   } catch (error) {
     logger.error('[ResumableAgentController] Initialization error:', error);
     if (!res.headersSent) {
-      res.status(500).json({ error: error.message || 'Failed to start generation' });
+      if (error?.code === 'GENERATION_PREDECESSOR_MISMATCH') {
+        // expectedPredecessorCreatedAt no longer matches the stream's current
+        // generation. Report the observed state so the client can retarget
+        // its queued follow-up at the actual current/replacement generation
+        // instead of silently dropping it (see useResumableSSE.ts's
+        // predecessor-mismatch handling, already implemented and tested).
+        const currentJob = error.currentJob;
+        res.status(409).json({
+          status: 'predecessor_mismatch',
+          code: 'GENERATION_PREDECESSOR_MISMATCH',
+          error: 'A newer generation became current before this request could start.',
+          streamId,
+          conversationId: currentJob?.conversationId ?? conversationId,
+          generationCreatedAt: currentJob?.createdAt,
+          active: currentJob?.active === true,
+        });
+      } else {
+        res.status(500).json({ error: error.message || 'Failed to start generation' });
+      }
     } else {
       // JSON already sent, emit error to stream so client can receive it
       await GenerationJobManager.emitError(streamId, error.message || 'Failed to start generation');
@@ -611,7 +757,13 @@ const _LegacyAgentController = async (req, res, next, initializeClient, addTitle
 
     // Create job in GenerationJobManager for abort handling
     // streamId === conversationId (pre-generated above)
-    const job = await GenerationJobManager.createJob(streamId, userId, conversationId);
+    const job = await GenerationJobManager.createJob(streamId, userId, conversationId, {
+      initialMetadata: {
+        endpoint: endpointOption.endpoint,
+        agent_id: endpointOption.agent_id ?? req.body?.agent_id,
+        preemptCapable: isSteerPreemptSupported(),
+      },
+    });
 
     // Store endpoint metadata for abort handling
     GenerationJobManager.updateMetadata(streamId, {

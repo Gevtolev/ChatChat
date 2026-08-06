@@ -17,6 +17,8 @@ RUN apk upgrade --no-cache
 RUN apk add --no-cache jemalloc
 # Set environment variable to use jemalloc
 ENV LD_PRELOAD=/usr/lib/libjemalloc.so.2
+# Opt out of reo-census's install-time analytics (pulled in transitively by @librechat/agents)
+ENV PACKAGE_TRACKER_ANALYTICS=false
 
 WORKDIR /app
 RUN apk --no-cache add curl

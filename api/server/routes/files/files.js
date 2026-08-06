@@ -4,6 +4,7 @@ const { logger, SystemCapabilities } = require('@librechat/data-schemas');
 const {
   logAxiosError,
   refreshS3FileUrls,
+  handleFilesUsageRequest,
   resolveUploadErrorMessage,
   verifyAgentUploadPermission,
 } = require('@librechat/api');
@@ -119,6 +120,33 @@ router.get('/config', async (req, res) => {
   } catch (error) {
     logger.error('[/files] Error getting fileConfig', error);
     res.status(400).json({ message: 'Error in request', error: error.message });
+  }
+});
+
+/**
+ * POST /files/usage
+ *
+ * Owner-scoped TTL hold for uploads sitting in a client-side queue (mid-run
+ * queued messages), so the upload-window TTL cannot reap them before drain.
+ * Extends the deadline rather than clearing it; the real release happens at
+ * send. Thin wrapper: validation, cap, hold window, and best-effort
+ * semantics live in `@librechat/api` (`handleFilesUsageRequest`).
+ *
+ * Upstream also passes `approvalTtlMs` (derived from the LangGraph
+ * checkpointer's configured approval window) so a queue waiting on a paused
+ * run outlives that pause. This fork has no such checkpointer config, so the
+ * hold falls back to `resolveFilesUsageHold`'s baseline window; wire
+ * `approvalTtlMs` through once HITL run-pausing lands.
+ */
+router.post('/usage', async (req, res) => {
+  try {
+    const { status, body } = await handleFilesUsageRequest(req.user ?? {}, req.body ?? {}, {
+      extendFilesTTL: db.extendFilesTTL,
+    });
+    return res.status(status).json(body);
+  } catch (error) {
+    logger.error('[/files/usage] Failed to mark files used', error);
+    return res.status(500).json({ code: 'FILES_USAGE_FAILED' });
   }
 });
 

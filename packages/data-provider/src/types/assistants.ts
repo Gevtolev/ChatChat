@@ -565,6 +565,24 @@ export type SummaryContentPart = {
   };
 };
 
+/**
+ * A user steering message injected mid-run at a tool-batch boundary.
+ * Persisted inline in the response message's content array (keyed by the
+ * type name like `text`/`think` so token counting reads it for free);
+ * replayed as a user message on subsequent turns by `formatAgentMessages`.
+ */
+export type SteerContentPart = {
+  type: ContentTypes.STEER;
+  steer: string;
+  steerId?: string;
+  /** Stable optimistic-client id used to settle a POST whose response was lost. */
+  clientSteerId?: string;
+  createdAt?: number;
+  /** Attachments steered with the message; re-encoded per turn on replay
+   *  like any other user-message media (refs only, never encoded data). */
+  files?: Partial<TFile>[];
+};
+
 export type TMessageContentParts =
   | ({
       type: ContentTypes.ERROR;
@@ -572,6 +590,7 @@ export type TMessageContentParts =
       error?: string;
     } & ContentMetadata)
   | ({ type: ContentTypes.THINK; think?: string | TextData } & ContentMetadata)
+  | (SteerContentPart & ContentMetadata)
   | ({
       type: ContentTypes.TEXT;
       text?: string | TextData;
@@ -590,6 +609,16 @@ export type TMessageContentParts =
     } & ContentMetadata)
   | ({ type: ContentTypes.IMAGE_FILE; image_file: ImageFile & PartMetadata } & ContentMetadata)
   | (SummaryContentPart & ContentMetadata)
+  | ({
+      /** One-line LLM-generated note describing a completed tool batch. UI-only:
+       *  never sent to the model (stripped before payload formatting). */
+      type: ContentTypes.ACTIVITY_LABEL;
+      activity_label?: string;
+      tool_call_ids?: string[];
+      /** ok = all tools succeeded, failed = all failed, partial = mixed. */
+      status?: 'ok' | 'partial' | 'failed';
+      pending?: boolean;
+    } & ContentMetadata)
   | (Agents.AgentUpdate & ContentMetadata)
   | (Agents.MessageContentImageUrl & ContentMetadata)
   | (Agents.MessageContentVideoUrl & ContentMetadata)

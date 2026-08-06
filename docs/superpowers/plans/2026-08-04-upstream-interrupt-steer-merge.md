@@ -17,7 +17,17 @@
 - `@librechat/agents` 必须升到 `^3.3.11`。Steering 需要 SDK 的 `injectedMessages`（agents#299），Preemptive 需要 preempt seam（agents#335、#346）。**3.2.62 不支持**，`isSteeringSupported()` 会返回 false。
 - 所有测试命令必须带本机环境前缀：`LD_LIBRARY_PATH="$HOME/.local/ssl1.1/usr/lib/x86_64-linux-gnu" MONGOMS_VERSION=4.4.18`。
 - 从仓库根跑 jest 会因残留 worktree 触发 haste 冲突，**必须 `cd` 到对应 workspace 目录再跑**。
-- 禁止 `any`；限制 `unknown`。所有 TypeScript / ESLint 报错必须清零。
+- 禁止 `any`；限制 `unknown`。
+- **类型检查的验收标准分两套**（2026-08-05 修订，原「所有 TS/ESLint 报错必须清零」在 client 上从未成立）：
+  - `packages/*` 与 `api/`：`npm run build` 必须零 `error TS`，`packages/api` 的 `npx tsc --noEmit` 必须退出码 0。
+  - `client/`：**`npm run build` 走的是纯 `vite build`，不做类型检查**，所以「build 成功」不能作为 client 的类型证据。client 的实际状态是 159 条既有类型错误（涉及 76 个文件），已固化为 `docs/superpowers/plans/client-ts-baseline.txt`。任何触及 client 的 Task，结束时必须跑：
+
+    ```bash
+    cd client && npx tsc --noEmit -p tsconfig.json 2>&1 | grep "error TS" | sed -E 's/\(([0-9]+),([0-9]+)\)//' | sort > /tmp/client-ts-now.txt
+    diff docs/superpowers/plans/client-ts-baseline.txt /tmp/client-ts-now.txt
+    ```
+
+    验收标准是 **`diff` 无新增行**（`>` 开头的行为零）。减少是允许的。基准去掉了行号，所以插入代码导致的行号漂移不会产生假阳性。
 - 用户可见文本一律走 `useLocalize()`，只改 `client/src/locales/en/translation.json`。
 - 每个 Task 结束必须提交一次，commit message 用英文，**禁止 Co-Authored-By 签名**。
 
@@ -247,16 +257,21 @@ git commit -m "chore(deps): upgrade @librechat/agents to ^3.3.11 for steering su
 
 ---
 
-## Task 3: 后端 stream 子系统整体对齐
+## Task 3: 后端 stream 子系统对齐 + steering 模块
+
+> **2026-08-04 裁定**：原 Task 3 与 Task 4 合并为本 Task。原因是原 Task 3 结束时 `stream/` 会引用尚未补齐的 steering 模块，必然留下类型错误，与 Global Constraints「所有 TypeScript / ESLint 报错必须清零」冲突。合并后**本 Task 结束时类型必须全绿**，不存在中间态。后续 Task 编号不变（Task 4 已并入本 Task）。
 
 **Files:**
 - Overwrite: `packages/api/src/stream/GenerationJobManager.ts`、`createStreamServices.ts`、`index.ts`、`interfaces/IJobStore.ts`、`implementations/{InMemoryEventTransport,InMemoryJobStore,RedisEventTransport,RedisJobStore}.ts`
 - Create: `packages/api/src/stream/{ApprovalLifecycle,SteerRecovery,SteeringLifecycle,abortContent,jobStoreCapabilities,metadata}.ts`、`packages/api/src/stream/internal/chunkPublication.ts`、`packages/api/src/stream/implementations/index.ts`、`packages/api/src/stream/interfaces/index.ts`
 - Overwrite: `packages/api/src/stream/` 下全部 `__tests__` 与 `*.spec.ts`
+- Create: `packages/api/src/agents/steering/{index,media,offset,refs,request,runtime}.ts` + 对应 spec
+- Create: `api/server/controllers/agents/protocol.js`
+- Modify: `packages/api/src/index.ts`（只补 steering 相关导出行）
 
 **Interfaces:**
 - Consumes: Task 2 的 SDK ^3.3.11
-- Produces: `GenerationJobManager`（含 `requestPreempt` / `isPreemptRequested` / `noteSteersRemoved` / `clearPreemptRequests`）、`IEventTransport` 的 `emitPreempt` / `onPreempt`、`SteeringLifecycle`、`SteerRecovery`。Task 4、5 依赖这些导出。
+- Produces: `GenerationJobManager`（含 `requestPreempt` / `isPreemptRequested` / `noteSteersRemoved` / `clearPreemptRequests`）、`IEventTransport` 的 `emitPreempt` / `onPreempt`、`SteeringLifecycle`、`SteerRecovery`；`handleSteerRequest` / `handleSteerCancel` / `handleSteerArm`（从 `@librechat/api` 导出）；`getRequestedGenerationProtocol` / `getServerGenerationProtocol` / `GENERATION_PROTOCOL_HEADER`（来自 `protocol.js`）。Task 5 的 `steer.js` 直接消费这些。
 
 - [ ] **Step 1: 再次确认我们对该目录零自定义（安全整体覆盖的前提）**
 
@@ -273,41 +288,14 @@ git checkout upstream/dev -- packages/api/src/stream/
 git status --short packages/api/src/stream/ | head -40
 ```
 
-- [ ] **Step 3: 检查该目录对外部模块的新增依赖是否都存在**
+- [ ] **Step 3: 记录该目录对外部模块的依赖，确认缺失项**
 
 ```bash
 grep -rhoE "from '[~@][^']*'" packages/api/src/stream/ | sort -u
 ```
-逐个确认这些路径在我们仓库里存在。若有缺失（例如指向 `~/agents/steering/*`），记下来，它们由 Task 4 补齐 —— 本 Task 允许暂时的类型报错，但**必须在 Task 4 结束时清零**。
+逐个确认这些路径在我们仓库里存在。把缺失的记进报告（预期会有指向 `~/agents/steering/*` 的），它们由本 Task 的 Step 4 补齐。**本 Task 结束时不允许残留任何类型错误。**
 
-- [ ] **Step 4: 跑 stream 子系统测试**
-
-```bash
-cd /data/lidongyu/projects/LibreChat/packages/api && LD_LIBRARY_PATH="$HOME/.local/ssl1.1/usr/lib/x86_64-linux-gnu" MONGOMS_VERSION=4.4.18 npx jest src/stream 2>&1 | tail -40
-```
-Expected: 若 Step 3 无缺失依赖则全绿；若有缺失，仅允许「模块找不到」类失败，且必须与 Step 3 记录的清单一一对应。
-
-- [ ] **Step 5: 提交**
-
-```bash
-git add packages/api/src/stream/
-git commit -m "chore(stream): align stream subsystem with upstream dev baseline"
-```
-
----
-
-## Task 4: 后端 steering 模块与 protocol
-
-**Files:**
-- Create: `packages/api/src/agents/steering/{index,media,offset,refs,request,runtime}.ts` + 对应 spec
-- Create: `api/server/controllers/agents/protocol.js`
-- Modify: `packages/api/src/index.ts`（导出 steering 公共 API）
-
-**Interfaces:**
-- Consumes: Task 3 的 `GenerationJobManager`、`SteeringLifecycle`
-- Produces: `handleSteerRequest`、`handleSteerCancel`、`handleSteerArm`（从 `@librechat/api` 导出，Task 5 的 `steer.js` 直接消费）；`getRequestedGenerationProtocol`、`getServerGenerationProtocol`、`GENERATION_PROTOCOL_HEADER`（来自 `protocol.js`）
-
-- [ ] **Step 1: 取上游 steering 模块与 protocol**
+- [ ] **Step 4: 取上游 steering 模块与 protocol**
 
 ```bash
 cd /data/lidongyu/projects/LibreChat
@@ -316,33 +304,39 @@ git checkout upstream/dev -- api/server/controllers/agents/protocol.js
 ls packages/api/src/agents/steering/
 ```
 
-- [ ] **Step 2: 对比 packages/api 的导出入口，只补 steering 相关行**
+- [ ] **Step 5: 对比 packages/api 的导出入口，只补 steering 相关行**
 
 ```bash
 git diff main:packages/api/src/index.ts upstream/dev:packages/api/src/index.ts | grep -iE '^\+.*(steer|preempt|protocol)'
 ```
-把匹配到的 `export` 行手工加进 `packages/api/src/index.ts`。**不要**整体覆盖该文件 —— 它包含我们自己的导出（`ingestFile` 之类历史项除外，billing / images 等都在里面）。
+把匹配到的 `export` 行手工加进 `packages/api/src/index.ts`。**不要**整体覆盖该文件 —— 它包含我们自己的 billing / images 等导出。
 
-- [ ] **Step 3: 类型检查，清掉 Task 3 遗留的缺失依赖**
+- [ ] **Step 6: 类型检查必须全绿**
 
 ```bash
 cd /data/lidongyu/projects/LibreChat && npm run build 2>&1 | grep -E "error TS" | head -30
 ```
-Expected: 与 steering / stream 相关的 TS 错误全部消失。若仍有，逐个定位缺失文件并从上游补齐。
+Expected: **零输出**。若仍有 TS 错误，逐个定位缺失文件并从上游补齐，不得遗留。
 
-- [ ] **Step 4: 跑 steering 与 stream 测试**
-
-```bash
-cd /data/lidongyu/projects/LibreChat/packages/api && LD_LIBRARY_PATH="$HOME/.local/ssl1.1/usr/lib/x86_64-linux-gnu" MONGOMS_VERSION=4.4.18 npx jest src/agents/steering src/stream 2>&1 | tail -40
-```
-Expected: 全绿。
-
-- [ ] **Step 5: 提交**
+- [ ] **Step 7: 跑 stream 与 steering 测试**
 
 ```bash
-git add packages/api/src/agents/steering/ api/server/controllers/agents/protocol.js packages/api/src/index.ts
-git commit -m "feat(steering): add upstream steering module and generation protocol"
+cd /data/lidongyu/projects/LibreChat/packages/api && LD_LIBRARY_PATH="$HOME/.local/ssl1.1/usr/lib/x86_64-linux-gnu" MONGOMS_VERSION=4.4.18 npx jest src/stream src/agents/steering 2>&1 | tail -40
 ```
+Expected: 全绿。例外：`redisClients.cache_integration.spec.ts` 等 Redis 集成套件在本机因无 Redis 服务而进程级崩溃，属基准中已记录的环境限制，不算失败。
+
+- [ ] **Step 8: 提交**
+
+```bash
+git add packages/api/src/stream/ packages/api/src/agents/steering/ api/server/controllers/agents/protocol.js packages/api/src/index.ts
+git commit -m "feat(stream): align stream subsystem with upstream and add steering module"
+```
+
+---
+
+## Task 4: 已并入 Task 3
+
+见 Task 3 开头的裁定说明。后续 Task 编号保持不变。
 
 ---
 
@@ -405,9 +399,105 @@ git commit -m "feat(steer): wire steer controller and routes into agents chat"
 
 ---
 
-## Task 6: 前端 SSE 层对齐并贴回 6 处自定义
+## Task 5b: steer 终局回收链
 
-> ⚠️ 本 Task 风险仅次于 Task 2。上游对 `useResumableSSE.ts` 改了 3192 行，我们的 6 处自定义必须**逐条**贴回。
+> **2026-08-04 新增**：Task 5 的审查用真实 `GenerationJobManager` 探针发现的 Critical，范围超出 Task 5 故另立。**必须在 Task 6 之前完成** —— 原计划全文 grep `request.js` 零命中，没有任何后续步骤会碰到它，不补则一路带到 Task 10 手工验收才暴露，届时已有 5 个前端任务压在死后端上。
+
+**问题**：运行结束前未被排空的 steer 会被静默销毁。
+
+链路：`completeJob(streamId, err)` → `claimTerminalJob` → `jobStore.transitionStatusAndDrainSteers`（`GenerationJobManager.ts:3077`）把残留 steer 收进 `claim.drainedSteers`。上游 `request.js:1644-1654` 把它变成 final 事件里的 `pendingSteers` 并 park 起来，`index.js:470-500` 与 `sendJoblessStatus` 再用 `claimDetailed` 交还给客户端。
+
+我们 fork：`request.js` 全部走两参数 `completeJob`，**从不读 `terminalClaim.drainedSteers`**；`park` / `claimDetailed` / `unrecoveredSteers` / `recoveredSteer` 全仓库**零调用点**（`api/` 与 `packages/api/src` 双向 grep 确认）。
+
+**失败场景**：drain 只发生在 `PostToolBatch`（工具批次边界）或 `PreemptBoundary`。因此只要 agent 在这条 steer 入队后不再调用任何工具 —— **纯聊天回答是 ChatChat 最常见的形态** —— 用户打字发出的 steer 会 202 成功、chip 亮起、然后随运行结束一起消失：无错误、无回执、无重投。受影响的是全部普通订阅用户。
+
+**Files:**
+- Modify: `api/server/controllers/agents/request.js`（读取终局 claim 的 `drainedSteers`，park 并放进 final 事件）
+- Modify: `api/server/routes/agents/index.js`（`claimDetailed` 状态路由，把未回收的 steer 交还客户端）
+- Test: `api/server/controllers/agents/__tests__/` 下新增终局回收用例
+
+**Interfaces:**
+- Consumes: Task 3 的 `GenerationJobManager.transitionStatusAndDrainSteers` / `claimTerminalJob`、Task 5 的 job identity（`initialMetadata` + `client.jobCreatedAt`）
+- Produces: final 事件中的 `pendingSteers` 字段；`unrecoveredSteers` 回收路径。Task 7 的前端 chip 状态机依赖它来决定 chip 是消失还是保留待重投。
+
+- [ ] **Step 1: 对拍上游三处实现**
+
+```bash
+cd /data/lidongyu/projects/LibreChat
+git show upstream/dev:api/server/controllers/agents/request.js | sed -n '1630,1670p'
+git show upstream/dev:api/server/routes/agents/index.js | sed -n '460,510p'
+git grep -n "claimDetailed\|unrecoveredSteers\|recoveredSteer" upstream/dev -- api packages/api/src
+```
+把上游的完整回收链读明白后再动手，记进报告。
+
+- [ ] **Step 2: 用真实对象写失败测试（先红）**
+
+用真实 `GenerationJobManager` + 真实 `InMemoryJobStore`（**不要 mock**）构造场景：建 job → 入队一条 steer → 不经过任何工具边界直接 `completeJob` → 断言这条 steer 能从终局 claim 中被取回。
+
+Run: `cd api && LD_LIBRARY_PATH="$HOME/.local/ssl1.1/usr/lib/x86_64-linux-gnu" MONGOMS_VERSION=4.4.18 npx jest server/controllers/agents --testPathPattern=<新测试文件>`
+Expected: FAIL —— 当前 `drainedSteers` 从不被读取。
+
+- [ ] **Step 3: 按上游实现回收链**
+
+`request.js` 改用能拿到终局 claim 的 `completeJob` 形式，读 `claim.drainedSteers`，park 后放进 final 事件的 `pendingSteers`；`index.js` 补 `claimDetailed` 状态路由。每处与上游区间对拍。
+
+- [ ] **Step 4: 测试转绿并跑真实探针**
+
+Run: 同 Step 2 命令
+Expected: PASS
+
+另跑一次真实（无 mock）探针，确认「入队 steer → 无工具边界 → 运行结束」后该 steer 可被取回，输出贴进报告。
+
+- [ ] **Step 5: 串行全量回归**
+
+```bash
+cd /data/lidongyu/projects/LibreChat/api && LD_LIBRARY_PATH="$HOME/.local/ssl1.1/usr/lib/x86_64-linux-gnu" MONGOMS_VERSION=4.4.18 npx jest 2>&1 | tail -20
+cd /data/lidongyu/projects/LibreChat/packages/api && LD_LIBRARY_PATH="$HOME/.local/ssl1.1/usr/lib/x86_64-linux-gnu" MONGOMS_VERSION=4.4.18 npx jest 2>&1 | tail -20
+cd /data/lidongyu/projects/LibreChat && npm run build 2>&1 | grep -E "error TS|Tasks:"
+```
+Expected: 失败集合 ⊆ 基准；build 零 `error TS`。**不要并行跑**（mongodb-memory-server 争用会产生假失败）。
+
+- [ ] **Step 6: 提交**
+
+```bash
+git add api/server/controllers/agents/ api/server/routes/agents/index.js
+git commit -m "fix(steer): recover undrained steers on job termination"
+```
+
+---
+
+## Task 6: 前端基础设施 + SSE 层对齐（已并入原 Task 7）
+
+> ⚠️ **2026-08-05 范围修订。** 首次执行本 Task 时报 BLOCKED：`git checkout upstream/dev -- client/src/hooks/SSE/` 拿到的新代码依赖大量本 fork 不存在的前端基础设施。实测闭包为 **174 条新增类型错误、37 个缺失导出符号、5 个缺失模块**，横跨 steer / 活动标签 / HITL 审批 / 协议 v2 协商 / usage 统计五个功能域 —— **上游前端 SSE 层已与这些功能深度耦合，无法只取 steer 部分**。决策者裁定：全量对齐。原 Task 7 的内容并入本 Task（状态层是这批基础设施的一部分），后续 Task 编号不变。
+>
+> 上一次执行的成果保存在 WIP 提交 `cc2326fac`（SSE 目录的自定义贴回 + `getStreamStartFailureText` 的 export 与对象分支修复），**不要丢弃，在其基础上继续**。
+>
+> ⚠️ 本 Task 是整个计划风险最高的一步。
+
+**必须搬入的缺失模块**（均已确认存在于 `upstream/dev @ b80729299`，可直接 `git checkout upstream/dev -- <path>`）：
+
+```
+client/src/utils/steer.ts          client/src/utils/approval.ts
+client/src/utils/tokens.ts         client/src/utils/focus.ts
+client/src/store/usage.ts          client/src/store/sandbox.ts
+client/src/store/steer.ts          client/src/data-provider/SSE/protocol.ts
+client/src/hooks/Chat/useSteering.ts        client/src/hooks/Chat/useSteerCancel.ts
+client/src/hooks/Chat/useSteerConvert.ts    client/src/hooks/Chat/useFocusRegeneratedResponse.ts
+```
+
+**另需向桶文件追加导出**（只加 steer/协议/usage 相关行，**禁止整体覆盖** —— 这些文件含本 fork 自己的导出）：
+`client/src/utils/index.ts`、`client/src/store/index.ts`、`client/src/store/families.ts`、`client/src/data-provider/index.ts`、`client/src/data-provider/SSE/queries.ts`、`client/src/utils/messages.ts`
+
+**37 个缺失符号的完整清单**（验收时逐个确认可解析）：
+`appendAppliedSteerIds` `applyActivityLabelPart` `applyPendingAction` `applySteerPart` `carriedSteerContext` `collectAppliedSteerIds` `countTaggedApprovalParts` `countTrailingOutputChars` `dedupeSteersById` `DrainAfterAbort` `estimateTokens` `findActivityLabelMessageIndex` `findPendingActionMessageIndex` `findSteerMessageIndex` `generationProtocolHeaders` `GenerationProtocolVersion` `GENERATION_PROTOCOL_VERSION` `getBranchSiblingIndexesForTarget` `getGenerationProtocolVersion` `insertQueuedOrigin` `markStreamStartFailedMetadata` `markTitleGenerationProcessed` `migrateIndex` `normalizeUsageUnits` `PendingSteer` `postGenerationRequest` `QueuedMessage` `QueuedMessageOrigin` `requestChatFocus` `resolveRunEndTarget` `sandboxStartingByToolCallId` `setEntryUsage` `sumBranch` `sumTotalUsage` `supportsGenerationProtocolV2` `upsertEntries`
+
+**建议施工顺序**（叶子优先，每层跑一次 `tsc` 看新增错误数单调下降）：
+1. `utils/*`（steer、approval、tokens、focus）与 `store/*`（usage、sandbox、steer）—— 叶子，不依赖 SSE
+2. `data-provider/SSE/protocol.ts` 与 `queries.ts` 的增量
+3. 桶文件追加导出
+4. 最后收 `hooks/SSE/`（在 WIP 基础上）与 `hooks/Chat/` 的四个 steer hooks
+
+**已知结论（首次执行验证，可直接采信，不必重做）**：6 处自定义中 **A3–A5（`finalReceived` 早退）与 B2（project 缓存失效三处）已被上游独立收敛为等价或更完备的实现，无需贴回**；需要手工贴回的只有 **A2/C（`!!` 布尔强制）与 B1/B3（匿名配额弹窗）**。另外上游自带的 `getStreamStartFailureText` 未 export、且对象型 `errorData` 分支跳过文本提取（即"用户看到裸 JSON"的 bug 重现），WIP 提交已修复并补回 6 个单测 —— 保留该修复。
 
 **Files:**
 - Overwrite then patch: `client/src/hooks/SSE/useResumableSSE.ts`、`useEventHandlers.ts`、`useSSE.ts`
@@ -478,59 +568,9 @@ git commit -m "chore(sse): align SSE hooks with upstream and restore local custo
 
 ---
 
-## Task 7: 前端 steer 状态层
+## Task 7: 已并入 Task 6
 
-**Files:**
-- Create: `client/src/store/steer.ts`、`client/src/utils/steer.ts`
-- Create: `client/src/hooks/Chat/{useSteering,useSteerCancel,useSteerConvert}.ts` + 对应测试
-- Modify: `client/src/data-provider/SSE/mutations.ts`（steer mutation）
-- Modify: `client/src/store/families.ts`（steer 相关 atom family）
-- Modify: `client/src/store/index.ts`（导出 steer store）
-
-**Interfaces:**
-- Consumes: Task 5 的 steer 端点、Task 6 的 SSE 事件
-- Produces: `useSteering()`（提交 steer / 排队消息）、`useSteerCancel()`、`useSteerConvert()`、`store.steer*` atoms。Task 8 的 UI 组件全部消费这些。
-
-- [ ] **Step 1: 取上游状态层文件**
-
-```bash
-cd /data/lidongyu/projects/LibreChat
-git checkout upstream/dev -- client/src/store/steer.ts client/src/utils/steer.ts
-git checkout upstream/dev -- client/src/hooks/Chat/useSteering.ts client/src/hooks/Chat/useSteerCancel.ts client/src/hooks/Chat/useSteerConvert.ts
-git checkout upstream/dev -- client/src/hooks/Chat/__tests__/useSteering.spec.tsx client/src/hooks/Chat/__tests__/useSteerConvert.spec.tsx
-git checkout upstream/dev -- client/src/utils/__tests__/steer.spec.ts
-```
-
-- [ ] **Step 2: 手工合并三个共享文件（不要整体覆盖）**
-
-```bash
-git diff main:client/src/store/families.ts upstream/dev:client/src/store/families.ts | grep -iE '^\+.*steer'
-git diff main:client/src/store/index.ts upstream/dev:client/src/store/index.ts | grep -iE '^\+.*steer'
-git diff main:client/src/data-provider/SSE/mutations.ts upstream/dev:client/src/data-provider/SSE/mutations.ts
-```
-只把 steer 相关行加进我们的版本。`store/index.ts` 里必须保住我们的 `guestUpgradeModalOpen` 导出。
-
-- [ ] **Step 3: 类型检查与测试**
-
-```bash
-cd /data/lidongyu/projects/LibreChat && npm run build 2>&1 | grep -E "error TS" | head -20
-cd /data/lidongyu/projects/LibreChat/client && npx jest src/hooks/Chat src/utils/__tests__/steer 2>&1 | tail -30
-```
-Expected: 无 TS 错误；测试全绿。
-
-- [ ] **Step 4: 确认匿名弹窗 atom 未丢**
-
-```bash
-grep -c "guestUpgradeModalOpen" client/src/store/index.ts client/src/store/misc.ts
-```
-Expected: 均 ≥1。
-
-- [ ] **Step 5: 提交**
-
-```bash
-git add client/src/store/ client/src/utils/steer.ts client/src/utils/__tests__/steer.spec.ts client/src/hooks/Chat/ client/src/data-provider/SSE/mutations.ts
-git commit -m "feat(steer): add client steer state layer and mutations"
-```
+见 Task 6 开头的范围修订说明。状态层（`store/steer.ts`、`utils/steer.ts`、四个 steer hooks、`data-provider/SSE/mutations.ts`）是 SSE 层的编译前置依赖，无法分开交付。后续 Task 编号保持不变。
 
 ---
 
@@ -608,7 +648,15 @@ git commit -m "feat(steer): add in-flight steer UI components and composer bindi
 
 ---
 
-## Task 9: 设置项、快捷键与本地化
+## Task 9: 设置项、快捷键挂载与本地化
+
+> **2026-08-05 范围调整**：`client/src/utils/shortcuts.ts` 与 `client/src/hooks/useKeyboardShortcuts.ts` **已在 Task 8 提前搬入**（`useTextarea.ts` 的编译依赖，两文件与上游逐字节一致，各自的上游 spec 也已跑过：`shortcuts.spec.ts` 53/53、`useKeyboardShortcuts.spec.tsx` 29/29）。本 Task 的实际剩余范围是三件事：
+>
+> 1. **挂载全局快捷键框架** —— `useKeyboardShortcuts` 的默认导出（全局 keydown 监听）目前**从未被挂载**，整套框架处于 inert 状态。挂载时注意：它会一并启用 `newChat` / `toggleSidebar` / `focusSearch` 等一批与 steer 无关的快捷键，需确认这些不与本 fork 既有交互冲突。
+> 2. **设置项注册** —— `client/src/store/settings.ts` 的两个 steer 相关 atom 已在 Task 8 随 `store/misc.ts` 合并时处理，本 Task 负责把设置项接进 `client/src/components/Nav/Settings/registry.tsx`。
+> 3. **补全 30 个缺失的 `com_shortcut_*` key**（Task 8 审查 M-1）—— 如 `com_shortcut_submit_message` / `com_shortcut_group_chat` 等。它们目前不可见（只被未挂载的快捷键设置弹窗消费），但**一旦第 1 项挂载就会立刻暴露为缺失文案**。
+>
+> **必办复查项**：挂载完成后回头看 Task 8 遗留的 I-4 —— `SteerMenu.tsx:249` 的 `aria-keyshortcuts` 会向读屏用户播报 `Control+Shift+.`（escalateSteer），在框架未挂载时那是个按了没反应的假承诺。挂载后该播报即成真实，与上游自带 `PendingSteerChips.test.tsx` 中"hover 激活时播报快捷键"断言的冲突自然消失。**若本 Task 最终决定不挂载全局框架，必须回头单独处理 I-4，且禁止为此新建自研的「是否已挂载」信号。**
 
 **Files:**
 - Modify: `client/src/store/settings.ts`（steer 默认行为设置）
@@ -747,3 +795,49 @@ EOF
 - **Task 6 结束后** —— 前后端基座全部对齐，steer 后端可用但前端无入口。**不建议**停在这里对外发布（用户看不到功能却承担了全部回归风险），但作为一个可评审的中间点是合理的。
 
 Task 7–9 必须连续完成，中途停下会留下半截 UI。
+
+---
+
+## Task 11: `useChatHelpers` abort 链（前端）
+
+> **2026-08-05 新增**，决策者要求补齐。端到端实测坐实：Alt+Enter（interrupt-and-send）只完成了"打断"，"发送"那一半断掉——文字变成挂着的 chip 等人手点 "Send now"。根因是 `client/src/hooks/Chat/useChatHelpers.ts` 与上游差 **203 行**，缺失部分正是 abort 后的 steer 回收链。
+
+**缺失清单**（对拍 `git diff HEAD:client/src/hooks/Chat/useChatHelpers.ts upstream/dev:client/src/hooks/Chat/useChatHelpers.ts` 确认）：
+- `client/src/hooks/Chat/abort.ts` 与 `useAbortCleanup`（约 36 行）
+- `signalInterruptDrain` / `clearInterruptDrain`
+- `stopGenerating` 里的 epoch 守卫
+- 从 abort 响应中回收 `pendingSteers` 的整段逻辑
+- 上游自带 `client/src/hooks/Chat/__tests__/abort.spec.tsx`（464 行）
+
+**验收**：Alt+Enter 在生成中触发后，文字应作为新一轮**自动发出**（而非停在 chip）；Ctrl+Shift+Enter（interruptSteer）同理。**必须补一个能复现当前缺陷的测试**——先红后绿，并回退验证红是真红。
+
+---
+
+## Task 12: `/api/files/usage` 路由与 `extendFilesTTL`（后端）
+
+> **2026-08-05 新增**。前端 `useMarkQueuedFilesUsage` 已就绪但被 `filesUsageBackendAvailable = false` 常量短路（Task 6 修复轮所加），因为该路由不存在。
+
+**两个必须一起做的部分**：
+1. `POST /api/files/usage` 路由 + `extendFilesTTL` 实现（对拍上游 `handleFilesUsageRequest`）
+2. 落地后**删除** `client/src/hooks/Chat/useSteering.ts` 的 `filesUsageBackendAvailable` 短路常量，并把 `useSteering.spec.tsx` 里那两条断言**改回**期望恰好一次 `markFilesUsage` 调用（当前断言为 `not.toHaveBeenCalled()`，注释里已写明恢复方法）
+
+**背景**：本 fork `packages/data-schemas/src/schema/file.ts` 有 `expiresAt` + `expires: 3600`（Mongo TTL 1 小时）。不补则排队消息的附件超过 1 小时会被回收，消息带着悬空 file 引用发出。另注意 `api/server/routes/files/index.js` 对该路径下所有 POST 套了限流。
+
+---
+
+## Task 13: 三个 override 字段的端到端打通（前后端）
+
+> **2026-08-05 新增**。Task 8 采用 B 方案时**故意**没透传 `clientRequestId` / `recoverySteerId` / `expectedPredecessorCreatedAt`，因为消费端在后端而后端从不读。现在两端一起补。**只做后端或只做前端都无意义，必须一起。**
+
+- **后端**：`api/server/controllers/agents/request.js` 读 `req.body` 的这三个字段。**下游基础设施已就绪**——`packages/api/src/stream/GenerationJobManager.ts` 的 `generationClaimKey` / `legacyGenerationClaimKey` 等幂等设施是 Task 2 升 SDK 时白捡的，只差读取这几行。
+- **前端**：`ChatForm.tsx` 的 `sendNow` 目前只转发 `manualSkills`，其余静默丢弃；`useChatFunctions.ts` 的 `ask()` 需按上游把 `recoverySteerId` 转成 `overrideUserMessageId`（该字段在 `TAskProps` 上已存在）。
+
+**收益**：排队/回收发送获得幂等去重（避免网络重试产生重复消息）与正确的续投语义。**当前缺失导致的具体故障**：恢复态队列消息二次发送失败时，`useResumableSSE.ts:2731-2757` 的恢复分支因 `submission.recoverySteerId` 恒 undefined 而永不进入，**用户文本静默丢失**。
+
+---
+
+## Task 14: `KeyboardDeleteDialog`（前端）
+
+> **2026-08-05 新增**。Task 9 已移植 `KeyboardShortcutsDialog`/`ShortcutRecorder`/`ShortcutKeyCombo`，唯独这个未移植——真实阻塞是本 fork `DeleteButton.tsx` 的 `DeleteButtonProps` 缺 `currentConversationId`（上游有），逐字节搬运会触发 TS 多余属性检查报错。
+
+需要：给 `DeleteButton.tsx` 加该 prop 并透传进 `DeleteConversationDialog`，再移植 `KeyboardDeleteDialog.tsx`（34 行）并在 `Root.tsx` 的 `KeyboardShortcutsProvider` 中渲染。完成后 `keyboardDeleteTarget` atom 才有消费方（当前写入后永无消费者）。同时更新 `Root.tsx` 那段 JSDoc。

@@ -5,11 +5,13 @@ const { logger } = require('@librechat/data-schemas');
 const {
   uaParser,
   checkBan,
+  moderateText,
   requireJwtAuth,
   messageIpLimiter,
   configMiddleware,
   messageUserLimiter,
 } = require('~/server/middleware');
+const SteerController = require('~/server/controllers/agents/steer');
 const { saveMessage } = require('~/models');
 const responses = require('./responses');
 const openai = require('./openai');
@@ -185,7 +187,17 @@ router.get('/chat/status/:conversationId', async (req, res) => {
   const job = await GenerationJobManager.getJob(conversationId);
 
   if (!job) {
-    return res.json({ active: false });
+    // The default completeJob path deletes the job record immediately, so
+    // this IS the common reload-after-terminal case — recover any steer that
+    // was still queued when the run ended without crossing a drain boundary.
+    const claimed = await GenerationJobManager.steering.claimDetailed(conversationId, {
+      userId: req.user.id,
+      tenantId: req.user.tenantId,
+    });
+    return res.json({
+      active: false,
+      ...(claimed.steers.length > 0 && { unrecoveredSteers: claimed.steers }),
+    });
   }
 
   if (job.metadata.userId !== req.user.id) {
@@ -201,6 +213,17 @@ router.get('/chat/status/:conversationId', async (req, res) => {
   const resumeState = await GenerationJobManager.getResumeState(conversationId);
   const isActive = job.status === 'running';
 
+  let unrecoveredSteers;
+  if (!isActive || job.metadata.steersClosed === true) {
+    const claimed = await GenerationJobManager.steering.claimDetailed(conversationId, {
+      userId: req.user.id,
+      tenantId: req.user.tenantId,
+    });
+    if (claimed.steers.length > 0) {
+      unrecoveredSteers = claimed.steers;
+    }
+  }
+
   res.json({
     active: isActive,
     streamId: conversationId,
@@ -208,6 +231,7 @@ router.get('/chat/status/:conversationId', async (req, res) => {
     aggregatedContent: resumeState?.aggregatedContent ?? [],
     createdAt: job.createdAt,
     resumeState,
+    ...(unrecoveredSteers && { unrecoveredSteers }),
   });
 });
 
@@ -313,6 +337,49 @@ router.post('/chat/abort', async (req, res) => {
   logger.warn(`[AgentStream] Job not found for streamId: ${jobStreamId}`);
   return res.status(404).json({ error: 'Job not found', streamId: jobStreamId });
 });
+
+/**
+ * @route POST /chat/steer
+ * @desc Queue a mid-run user message for injection at the next tool boundary
+ * @access Private
+ * @description Mounted before chatRouter to bypass buildEndpointOption middleware,
+ * but a steer is model-bound user text, so it carries the same guards as a normal
+ * message: the configured IP/user rate limiters, then `moderateText`.
+ */
+const steerLimiters = [];
+if (isEnabled(LIMIT_MESSAGE_IP)) {
+  steerLimiters.push(messageIpLimiter);
+}
+if (isEnabled(LIMIT_MESSAGE_USER)) {
+  steerLimiters.push(messageUserLimiter);
+}
+router.post('/chat/steer', configMiddleware, ...steerLimiters, moderateText, SteerController);
+
+/**
+ * @route POST /chat/steer/cancel
+ * @desc Remove a still-queued steer before injection (no model-bound content,
+ * so no moderation pass — just the shared rate limiters)
+ * @access Private
+ */
+router.post(
+  '/chat/steer/cancel',
+  configMiddleware,
+  ...steerLimiters,
+  SteerController.SteerCancelController,
+);
+
+/**
+ * @route POST /chat/steer/arm
+ * @desc Escalate a still-queued steer to an interrupt in place (no new
+ * model-bound content, so no moderation pass — just the shared limiters)
+ * @access Private
+ */
+router.post(
+  '/chat/steer/arm',
+  configMiddleware,
+  ...steerLimiters,
+  SteerController.SteerArmController,
+);
 
 const chatRouter = express.Router();
 chatRouter.use(configMiddleware);

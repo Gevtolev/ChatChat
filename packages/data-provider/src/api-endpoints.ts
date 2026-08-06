@@ -295,6 +295,7 @@ export const revertAgentVersion = (agent_id: string) => `${agents({ path: `${age
 export const files = () => `${BASE_URL}/api/files`;
 export const fileUpload = () => `${BASE_URL}/api/files`;
 export const fileDelete = () => `${BASE_URL}/api/files`;
+export const fileUsage = () => `${BASE_URL}/api/files/usage`;
 export const fileDownload = (userId: string, fileId: string) =>
   `${BASE_URL}/api/files/download/${userId}/${fileId}`;
 /* Deferred-preview lifecycle endpoint. Returns

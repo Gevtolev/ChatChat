@@ -39,6 +39,13 @@ const {
   buildAgentScopedContext,
   buildSkillPrimeContentParts,
   buildInitialToolSessions,
+  createSteerIndexOffsetHandlers,
+  createSteerDrainHook,
+  createSteerPreemptBoundaryHook,
+  createSteerPreemptPoll,
+  isSteeringSupported,
+  isSteerPreemptSupported,
+  buildSteerMedia,
 } = require('@librechat/api');
 const {
   Callback,
@@ -50,6 +57,7 @@ const {
 } = require('@librechat/agents');
 const {
   Constants,
+  SteerEvents,
   Permissions,
   VisionModes,
   ContentTypes,
@@ -83,6 +91,10 @@ class AgentClient extends BaseClient {
 
     /** @deprecated @type {true} - Is a Chat Completion Request */
     this.isChatCompletion = true;
+
+    /** The job's `createdAt` this client was wired against, when known.
+     * @type {number | undefined} */
+    this.jobCreatedAt = options.jobCreatedAt;
 
     /** @type {AgentRun} */
     this.run;
@@ -132,6 +144,11 @@ class AgentClient extends BaseClient {
     this.usage;
     /** @type {Record<string, number>} */
     this.indexTokenCountMap = {};
+    /** Mutable content-index shift shared with the steer offset handlers.
+     *  Incremented each time a steer part is spliced into `contentParts`, so
+     *  SDK-emitted indices that arrive after an injection land past it.
+     *  @type {import('@librechat/api').SteerOffsetState} */
+    this.steerOffsetState = { offset: 0 };
     /** @type {(messages: BaseMessage[]) => Promise<void>} */
     this.processMemory;
   }
@@ -180,6 +197,103 @@ class AgentClient extends BaseClient {
       }
     }
     buffer.clear();
+  }
+
+  /**
+   * Apply one drained steer to host state: append the steer content part at
+   * the live content index, bump the shared index offset so subsequent SDK
+   * step indices land past it, and emit `on_steer_applied` so the live client
+   * replaces its pending chip with the inline part (the emitted chunk also
+   * reaches the Redis chunk log for reconnect reconstruction).
+   *
+   * Runs BEFORE the drain hook's media encode so an abort during the encode
+   * cannot lose the steer. File refs persist from the queue item (sanitized at
+   * enqueue); replay/token accounting re-fetch owner-scoped and re-encode per
+   * turn, so unauthorized ids drop out there.
+   *
+   * @param {string} streamId
+   * @param {import('@librechat/api').SteerQueueItem} item
+   */
+  async applySteerPart(streamId, item) {
+    const index = this.contentParts.length;
+    const part = {
+      type: ContentTypes.STEER,
+      [ContentTypes.STEER]: item.text,
+      steerId: item.steerId,
+      ...(item.clientSteerId && { clientSteerId: item.clientSteerId }),
+      createdAt: item.createdAt,
+      ...(item.files?.length && { files: item.files }),
+    };
+    this.contentParts.push(part);
+    this.steerOffsetState.offset += 1;
+    // durable: the chunk-log XADD is this event's recovery record — it must
+    // commit before the publish or a cross-replica reconnect that missed the
+    // pub/sub delivery reconstructs content without the steer part.
+    try {
+      await GenerationJobManager.emitChunk(
+        streamId,
+        {
+          event: SteerEvents.ON_STEER_APPLIED,
+          data: {
+            steerId: item.steerId,
+            ...(item.clientSteerId && { clientSteerId: item.clientSteerId }),
+            index,
+            part,
+            responseMessageId: this.responseMessageId,
+            conversationId: this.conversationId,
+          },
+        },
+        {
+          durable: true,
+          expectedCreatedAt: this.jobCreatedAt,
+          deliveredSteer: item,
+        },
+      );
+    } catch (error) {
+      /** The part and its receipt commit as one durable unit. Roll the local
+       * projection back when that commit fails so the drain can restore the
+       * claimed item instead of injecting an instruction absent from replay. */
+      if (this.contentParts[index] === part) {
+        this.contentParts.splice(index, 1);
+        this.steerOffsetState.offset -= 1;
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * The `steering` fragment for `createRun`: the run-scoped PostToolBatch
+   * drain hook — plus, when the SDK can seal mid-stream, the PreemptBoundary
+   * twin and the preempt poll built from the SAME drain closures, so both
+   * boundaries inject byte-identical shapes. `undefined` when there is no
+   * resumable job surface or the installed SDK cannot inject hook messages
+   * (draining would drop them).
+   *
+   * @param {string | undefined} streamId
+   */
+  buildSteerWiring(streamId) {
+    if (!streamId || !isSteeringSupported()) {
+      return undefined;
+    }
+    const drainOptions = {
+      streamId,
+      jobCreatedAt: this.jobCreatedAt,
+      applySteer: (item) => this.applySteerPart(streamId, item),
+      buildMedia: (item) =>
+        buildSteerMedia({
+          client: this,
+          user: this.options.req?.user,
+          item,
+          getFiles: db.getFiles,
+        }),
+    };
+    return {
+      hook: createSteerDrainHook(drainOptions),
+      ...(isSteerPreemptSupported() && {
+        preemptHook: createSteerPreemptBoundaryHook(drainOptions),
+        preemption: createSteerPreemptPoll(streamId),
+      }),
+    };
   }
 
   setOptions(_options) {}
@@ -1070,6 +1184,8 @@ class AgentClient extends BaseClient {
           );
         }
 
+        const streamId = this.options.req?._resumableStreamId;
+
         run = await createRun({
           agents,
           messages,
@@ -1079,7 +1195,14 @@ class AgentClient extends BaseClient {
           calibrationRatio,
           runId: this.responseMessageId,
           signal: abortController.signal,
-          customHandlers: this.options.eventHandlers,
+          // Mid-run steering: drain queued user messages at each tool-batch
+          // boundary and inject them into graph state. The offset wrapper
+          // shifts SDK content indices past any spliced steer parts.
+          steering: this.buildSteerWiring(streamId),
+          customHandlers: createSteerIndexOffsetHandlers(
+            this.options.eventHandlers,
+            this.steerOffsetState,
+          ),
           requestBody: config.configurable.requestBody,
           user: createSafeUser(this.options.req?.user),
           summarizationConfig: appConfig?.summarization,
@@ -1093,7 +1216,6 @@ class AgentClient extends BaseClient {
 
         this.run = run;
 
-        const streamId = this.options.req?._resumableStreamId;
         if (streamId && run.Graph) {
           GenerationJobManager.setGraph(streamId, run.Graph);
         }
@@ -1160,9 +1282,12 @@ class AgentClient extends BaseClient {
           // 1. At or after the finalContentStart index
           // 2. Of type tool_call
           // 3. Have tool_call_ids property
+          // 4. Steer parts — user speech, not intermediate agent output;
+          //    dropping one would erase the user's words from the persisted turn
           return (
             index >= this.contentParts.length - 1 ||
             part.type === ContentTypes.TOOL_CALL ||
+            part.type === ContentTypes.STEER ||
             part.tool_call_ids
           );
         });

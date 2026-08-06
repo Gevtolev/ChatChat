@@ -149,6 +149,7 @@ describe('AgentDetail', () => {
       getQueryData: jest.fn(),
       setQueryData: jest.fn(),
       invalidateQueries: jest.fn(),
+      removeQueries: jest.fn(),
     });
 
     // Setup clipboard mock if it doesn't exist
@@ -233,6 +234,7 @@ describe('AgentDetail', () => {
         getQueryData: jest.fn().mockReturnValue(null),
         setQueryData: jest.fn(),
         invalidateQueries: jest.fn(),
+        removeQueries: jest.fn(),
       };
 
       // Update mocks for this test

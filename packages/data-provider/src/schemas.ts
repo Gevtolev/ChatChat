@@ -83,6 +83,22 @@ export const isDocumentSupportedProvider = (provider?: string | null): boolean =
   return documentSupportedProviders.has(provider ?? '');
 };
 
+export const cacheSubsetProviders = new Set<string>([
+  Providers.OPENAI,
+  Providers.AZURE,
+  Providers.GOOGLE,
+  Providers.VERTEXAI,
+  Providers.XAI,
+  Providers.DEEPSEEK,
+  Providers.OPENROUTER,
+  Providers.MOONSHOT,
+  Providers.ANTHROPIC,
+]);
+
+export const inputTokensIncludesCache = (provider?: string | null): boolean => {
+  return cacheSubsetProviders.has(provider ?? '');
+};
+
 export const paramEndpoints = new Set<EModelEndpoint | string>([
   EModelEndpoint.agents,
   EModelEndpoint.openAI,
@@ -686,6 +702,8 @@ export const tMessageSchema = z.object({
   feedback: feedbackSchema.optional(),
   /** metadata */
   metadata: z.record(z.unknown()).optional(),
+  /** Output tokens for assistant messages, calibrated prompt-side estimate for user messages */
+  tokenCount: z.number().optional(),
   contextMeta: z
     .object({
       calibrationRatio: z
@@ -719,6 +737,14 @@ export const tMessageSchema = z.object({
    * what actually ran, not the current catalog).
    */
   alwaysAppliedSkills: z.array(z.string()).optional(),
+  /**
+   * Verbatim excerpts the user quoted (via the "Add to chat" selection
+   * popup) to reference on this turn. UI metadata that `MessageQuotes`
+   * renders above the user bubble so the references persist on reload. The
+   * excerpts are merged into the user message text sent to the model at
+   * request time and counted in the user message token count.
+   */
+  quotes: z.array(z.string()).optional(),
 });
 
 export type MemoryArtifact = {

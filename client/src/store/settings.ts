@@ -30,6 +30,19 @@ const localStorageAtoms = {
 
   // Chat settings
   enterToSend: atomWithLocalStorage('enterToSend', true),
+  /** What Enter does while a run is generating: steer (inject mid-run) or queue (send after). */
+  duringRunDefaultAction: atomWithLocalStorage<'steer' | 'queue'>(
+    'duringRunDefaultAction',
+    'steer',
+  ),
+  /**
+   * Whether a steer interrupts generation at the next safe boundary instead of
+   * waiting for the run's next tool step. Orthogonal to
+   * `duringRunDefaultAction`: that chooses steer-vs-queue, this chooses how
+   * soon a steer lands. The composer's interrupt button always interrupts
+   * regardless — this only governs the default Enter/steer route.
+   */
+  steerInterruptsByDefault: atomWithLocalStorage('steerInterruptsByDefault', false),
   maximizeChatSpace: atomWithLocalStorage('maximizeChatSpace', false),
   chatDirection: atomWithLocalStorage('chatDirection', 'LTR'),
   autoExpandTools: atomWithLocalStorage(LocalStorageKeys.AUTO_EXPAND_TOOLS, false),

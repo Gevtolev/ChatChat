@@ -1,6 +1,7 @@
 import { memo } from 'react';
 import { showThinkingAtom } from '~/store/showThinking';
 import AdvancedPrompts from './AdvancedPrompts';
+import DuringRunAction from './DuringRunAction';
 import FontSizeSelector from './FontSizeSelector';
 import { ForkSettings } from './ForkSettings';
 import ChatDirection from './ChatDirection';
@@ -28,6 +29,13 @@ const toggleSwitchConfigs = [
     switchId: 'enterToSend',
     hoverCardText: 'com_nav_info_enter_to_send' as const,
     key: 'enterToSend',
+  },
+  {
+    stateAtom: store.steerInterruptsByDefault,
+    localizationKey: 'com_ui_steer_interrupts_default' as const,
+    switchId: 'steerInterruptsByDefault',
+    hoverCardText: 'com_ui_steer_interrupts_default_info' as const,
+    key: 'steerInterruptsByDefault',
   },
   {
     stateAtom: store.maximizeChatSpace,
@@ -120,6 +128,9 @@ function Chat() {
           />
         </div>
       ))}
+      <div className="pb-3">
+        <DuringRunAction />
+      </div>
       <div className="pb-3">
         <AdvancedPrompts />
       </div>

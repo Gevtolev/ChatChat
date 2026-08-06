@@ -14,6 +14,12 @@ interface FilePreviewDialogProps {
   onOpenChange: (open: boolean) => void;
   fileName: string;
   fileId?: string;
+  /** Not yet used for downloads (see `useFileDownload` below): the share-route
+   *  aware download path isn't ported in this fork, so shared-view non-image
+   *  attachments inherit the existing pre-steer limitation. Accepted so
+   *  callers (e.g. `SteerPart`, `InFlightSteers`) can pass it without a type
+   *  error. */
+  filePath?: string;
   relevance?: number;
   pages?: number[];
   pageRelevance?: Record<number, number>;
