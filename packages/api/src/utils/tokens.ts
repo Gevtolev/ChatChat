@@ -147,6 +147,8 @@ const anthropicModels = {
   'claude-sonnet-5': 1000000,
   'claude-opus-4-6': 1000000,
   'claude-opus-4-7': 1000000,
+  'claude-opus-4-8': 1000000,
+  'claude-opus-5': 1000000,
 };
 
 const deepseekModels = {

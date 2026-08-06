@@ -2338,6 +2338,90 @@ describe('Claude Model Tests', () => {
     );
   });
 
+  it('should return correct prompt and completion rates for Claude Opus 4.8', () => {
+    expect(tokenValues['claude-opus-4-8']).toEqual({ prompt: 5, completion: 25 });
+  });
+
+  it('should handle Claude Opus 4.8 model name variations', () => {
+    const modelVariations = [
+      'claude-opus-4-8',
+      'claude-opus-4-8-20260601',
+      'claude-opus-4-8-latest',
+      'anthropic/claude-opus-4-8',
+      'claude-opus-4-8/anthropic',
+      'claude-opus-4-8-preview',
+    ];
+
+    modelVariations.forEach((model) => {
+      const valueKey = getValueKey(model);
+      expect(valueKey).toBe('claude-opus-4-8');
+      expect(getMultiplier({ model, tokenType: 'prompt' })).toBe(5);
+      expect(getMultiplier({ model, tokenType: 'completion' })).toBe(25);
+    });
+  });
+
+  it('should return correct cache rates for Claude Opus 4.8', () => {
+    expect(cacheTokenValues['claude-opus-4-8']).toEqual({ write: 6.25, read: 0.5 });
+  });
+
+  it('should handle Claude Opus 4.8 cache rates with model name variations', () => {
+    const modelVariations = [
+      'claude-opus-4-8',
+      'claude-opus-4-8-20260601',
+      'claude-opus-4-8-latest',
+      'anthropic/claude-opus-4-8',
+      'claude-opus-4-8/anthropic',
+      'claude-opus-4-8-preview',
+    ];
+
+    modelVariations.forEach((model) => {
+      expect(getCacheMultiplier({ model, cacheType: 'write' })).toBe(6.25);
+      expect(getCacheMultiplier({ model, cacheType: 'read' })).toBe(0.5);
+    });
+  });
+
+  it('should return correct prompt and completion rates for Claude Opus 5', () => {
+    expect(tokenValues['claude-opus-5']).toEqual({ prompt: 5, completion: 25 });
+  });
+
+  it('should handle Claude Opus 5 model name variations', () => {
+    const modelVariations = [
+      'claude-opus-5',
+      'claude-opus-5-20260701',
+      'claude-opus-5-latest',
+      'anthropic/claude-opus-5',
+      'claude-opus-5/anthropic',
+      'claude-opus-5-preview',
+    ];
+
+    modelVariations.forEach((model) => {
+      const valueKey = getValueKey(model);
+      expect(valueKey).toBe('claude-opus-5');
+      expect(getMultiplier({ model, tokenType: 'prompt' })).toBe(5);
+      expect(getMultiplier({ model, tokenType: 'completion' })).toBe(25);
+    });
+  });
+
+  it('should return correct cache rates for Claude Opus 5', () => {
+    expect(cacheTokenValues['claude-opus-5']).toEqual({ write: 6.25, read: 0.5 });
+  });
+
+  it('should handle Claude Opus 5 cache rates with model name variations', () => {
+    const modelVariations = [
+      'claude-opus-5',
+      'claude-opus-5-20260701',
+      'claude-opus-5-latest',
+      'anthropic/claude-opus-5',
+      'claude-opus-5/anthropic',
+      'claude-opus-5-preview',
+    ];
+
+    modelVariations.forEach((model) => {
+      expect(getCacheMultiplier({ model, cacheType: 'write' })).toBe(6.25);
+      expect(getCacheMultiplier({ model, cacheType: 'read' })).toBe(0.5);
+    });
+  });
+
   it('should return correct prompt and completion rates for Claude Sonnet 5', () => {
     expect(getMultiplier({ model: 'claude-sonnet-5', tokenType: 'prompt' })).toBe(
       tokenValues['claude-sonnet-5'].prompt,
