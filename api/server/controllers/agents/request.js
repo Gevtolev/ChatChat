@@ -8,6 +8,7 @@ const {
   GenerationJobManager,
   decrementPendingRequest,
   isSteerPreemptSupported,
+  buildRecoveredSteerPayload,
   sanitizeMessageForTransmit,
   checkAndIncrementPendingRequest,
 } = require('@librechat/api');
@@ -15,11 +16,24 @@ const { disposeClient, clientRegistry, requestDataMap } = require('~/server/clea
 const { handleAbortError } = require('~/server/middleware');
 const { logViolation } = require('~/cache');
 const { saveMessage, getConvo } = require('~/models');
+const {
+  GENERATION_PROTOCOL_HEADER,
+  negotiateNewGenerationProtocol,
+  negotiateExistingGenerationProtocol,
+} = require('./protocol');
 
 /** Mirrors upstream's `CLIENT_REQUEST_ID_PATTERN` - reused for both
  * `clientRequestId` and `recoverySteerId`, which are both opaque stable ids
  * minted client-side (uuid or steer id). */
 const CLIENT_REQUEST_ID_PATTERN = /^[A-Za-z0-9:_-]{1,128}$/;
+
+/** Stamps every JSON response with the negotiated generation protocol, in both
+ * the body (for clients that only inspect JSON) and the header (for clients
+ * that need it before the body is parsed, e.g. to route a 503 retry). */
+function sendGenerationJson(res, status, body, generationProtocolVersion) {
+  res.set(GENERATION_PROTOCOL_HEADER, String(generationProtocolVersion));
+  return res.status(status).json({ ...body, generationProtocolVersion });
+}
 
 function createCloseHandler(abortController) {
   return function (manual) {
@@ -86,6 +100,11 @@ async function attachConversationCreatedAt(req, { userId, conversationId, isNewC
  * Returns streamId immediately, client subscribes separately via SSE.
  */
 const ResumableAgentController = async (req, res, next, initializeClient, addTitle) => {
+  // Upper bound for this attempt: min(what the client advertises, what this server
+  // instance currently supports). Re-negotiated against the job's own immutable
+  // metadata once a job exists/is found (see below) - a job never changes protocol
+  // mid-flight even if the server-wide capability changes under it.
+  let generationProtocolVersion = negotiateNewGenerationProtocol(req, GenerationJobManager);
   const {
     text,
     isRegenerate,
@@ -109,10 +128,15 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
     clientRequestId != null &&
     (typeof clientRequestId !== 'string' || !CLIENT_REQUEST_ID_PATTERN.test(clientRequestId))
   ) {
-    return res.status(400).json({
-      code: 'INVALID_CLIENT_REQUEST_ID',
-      error: 'clientRequestId must be a 1-128 character identifier.',
-    });
+    return sendGenerationJson(
+      res,
+      400,
+      {
+        code: 'INVALID_CLIENT_REQUEST_ID',
+        error: 'clientRequestId must be a 1-128 character identifier.',
+      },
+      generationProtocolVersion,
+    );
   }
 
   const expectedPredecessorCreatedAt = req.body?.expectedPredecessorCreatedAt;
@@ -120,10 +144,15 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
     expectedPredecessorCreatedAt != null &&
     (!Number.isSafeInteger(expectedPredecessorCreatedAt) || expectedPredecessorCreatedAt < 0)
   ) {
-    return res.status(400).json({
-      code: 'INVALID_GENERATION_PREDECESSOR',
-      error: 'expectedPredecessorCreatedAt must be a non-negative safe integer.',
-    });
+    return sendGenerationJson(
+      res,
+      400,
+      {
+        code: 'INVALID_GENERATION_PREDECESSOR',
+        error: 'expectedPredecessorCreatedAt must be a non-negative safe integer.',
+      },
+      generationProtocolVersion,
+    );
   }
 
   const recoverySteerId = req.body?.recoverySteerId;
@@ -131,10 +160,15 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
     recoverySteerId != null &&
     (typeof recoverySteerId !== 'string' || !CLIENT_REQUEST_ID_PATTERN.test(recoverySteerId))
   ) {
-    return res.status(400).json({
-      code: 'INVALID_RECOVERY_REQUEST',
-      error: 'recoverySteerId must be a 1-128 character identifier.',
-    });
+    return sendGenerationJson(
+      res,
+      400,
+      {
+        code: 'INVALID_RECOVERY_REQUEST',
+        error: 'recoverySteerId must be a 1-128 character identifier.',
+      },
+      generationProtocolVersion,
+    );
   }
   if (recoverySteerId != null && req.body.overrideUserMessageId === recoverySteerId) {
     // BaseClient's processOverideIds() treats a bare id (no COMMON_DIVIDER) as
@@ -144,12 +178,17 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
     // fresh randomUUID row on every retry.
     req.body.overrideUserMessageId = `${recoverySteerId}${Constants.COMMON_DIVIDER}0`;
   }
+  // Exact user-visible source proof checked inside GenerationJobManager's
+  // atomic createJob, so the store only leases/consumes the parked item this
+  // request actually reproduces.
+  const recoveredSteerPayload =
+    recoverySteerId != null ? buildRecoveredSteerPayload(text, req.body?.files) : undefined;
 
   const { allowed, pendingRequests, limit } = await checkAndIncrementPendingRequest(userId);
   if (!allowed) {
     const violationInfo = getViolationInfo(pendingRequests, limit);
     await logViolation(req, res, ViolationTypes.CONCURRENT, violationInfo, violationInfo.score);
-    return res.status(429).json(violationInfo);
+    return sendGenerationJson(res, 429, violationInfo, generationProtocolVersion);
   }
 
   // Generate conversationId upfront if not provided - streamId === conversationId always
@@ -172,6 +211,7 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
         clientRequestId,
         streamId,
         conversationId,
+        generationProtocolVersion,
       );
       if (claim.claimed) {
         idempotencyClaimToken = claim.existing?.claimToken;
@@ -187,12 +227,22 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
           streamId: claim.existing.streamId,
         });
         await decrementPendingRequest(userId);
-        return res.json({
-          streamId: claim.existing.streamId,
-          conversationId: claim.existing.conversationId,
-          generationCreatedAt: claim.existing.startedAt,
-          status: 'started',
-        });
+        // The original job is the protocol's source of truth; a stale/missing
+        // job (already cleaned up) falls back to the conservative v1 floor
+        // rather than trusting this retry's own advertised marker.
+        const existingJob = await GenerationJobManager.getJob(claim.existing.streamId);
+        generationProtocolVersion = negotiateExistingGenerationProtocol(req, existingJob);
+        return sendGenerationJson(
+          res,
+          200,
+          {
+            streamId: claim.existing.streamId,
+            conversationId: claim.existing.conversationId,
+            generationCreatedAt: claim.existing.startedAt,
+            status: 'started',
+          },
+          generationProtocolVersion,
+        );
       }
     } catch (error) {
       logger.warn(
@@ -215,6 +265,7 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
     const job = await GenerationJobManager.createJob(streamId, userId, conversationId, {
       initialMetadata: {
         endpoint: endpointOption.endpoint,
+        generationProtocolVersion,
         // Persist the originating agent so steer-time ACL checks (steer.js's
         // createAgentAccessCheck) can authorize against the run's actual
         // identity instead of trusting the steer request body.
@@ -229,13 +280,49 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
         idempotencyClaimToken,
       }),
       ...(expectedPredecessorCreatedAt != null && { expectedPredecessorCreatedAt }),
+      ...(recoverySteerId && { recoveredSteerId: recoverySteerId }),
+      ...(recoveredSteerPayload && { recoveredSteerPayload }),
     });
+    // The job's own immutable metadata is now the source of truth: this locks
+    // the generation to the protocol it was created with for its whole
+    // lifetime, even if a later request against the same job advertises a
+    // different marker or the server-wide capability changes under it.
+    generationProtocolVersion = negotiateExistingGenerationProtocol(req, job);
     const jobCreatedAt = job.createdAt; // Capture creation time to detect job replacement
     req._resumableStreamId = streamId;
 
+    let recoveredSteerCommitted = false;
+    // Only consume the parked recovery source once the recovered turn's user
+    // message is durably saved -- losing this call must never lose the only
+    // durable copy of the user's recovered words, so it stays a no-op until
+    // that persistence succeeds (see the call site below).
+    const commitRecoveredSteer = async () => {
+      if (!recoverySteerId || recoveredSteerCommitted) {
+        return;
+      }
+      if (client?.skipSaveUserMessage) {
+        throw new Error('Recovered steer cannot skip user message persistence');
+      }
+      const committed = await GenerationJobManager.steering.consumeRecovered(
+        streamId,
+        recoverySteerId,
+        { userId, tenantId: req.user?.tenantId },
+        jobCreatedAt,
+      );
+      if (!committed) {
+        throw new Error('Recovered steer could not be committed after message persistence');
+      }
+      recoveredSteerCommitted = true;
+    };
+
     // Send JSON response IMMEDIATELY so client can connect to SSE stream
     // This is critical: tool loading (MCP OAuth) may emit events that the client needs to receive
-    res.json({ streamId, conversationId, generationCreatedAt: jobCreatedAt, status: 'started' });
+    sendGenerationJson(
+      res,
+      200,
+      { streamId, conversationId, generationCreatedAt: jobCreatedAt, status: 'started' },
+      generationProtocolVersion,
+    );
 
     await attachConversationCreatedAt(req, { userId, conversationId, isNewConvo });
 
@@ -450,6 +537,7 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
             context: 'api/server/controllers/agents/request.js - resumable user message',
           });
         }
+        await commitRecoveredSteer();
 
         // CRITICAL: Save response message BEFORE emitting final event.
         // This prevents race conditions where the client sends a follow-up message
@@ -591,17 +679,27 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
         // instead of silently dropping it (see useResumableSSE.ts's
         // predecessor-mismatch handling, already implemented and tested).
         const currentJob = error.currentJob;
-        res.status(409).json({
-          status: 'predecessor_mismatch',
-          code: 'GENERATION_PREDECESSOR_MISMATCH',
-          error: 'A newer generation became current before this request could start.',
-          streamId,
-          conversationId: currentJob?.conversationId ?? conversationId,
-          generationCreatedAt: currentJob?.createdAt,
-          active: currentJob?.active === true,
-        });
+        sendGenerationJson(
+          res,
+          409,
+          {
+            status: 'predecessor_mismatch',
+            code: 'GENERATION_PREDECESSOR_MISMATCH',
+            error: 'A newer generation became current before this request could start.',
+            streamId,
+            conversationId: currentJob?.conversationId ?? conversationId,
+            generationCreatedAt: currentJob?.createdAt,
+            active: currentJob?.active === true,
+          },
+          generationProtocolVersion,
+        );
       } else {
-        res.status(500).json({ error: error.message || 'Failed to start generation' });
+        sendGenerationJson(
+          res,
+          500,
+          { error: error.message || 'Failed to start generation' },
+          generationProtocolVersion,
+        );
       }
     } else {
       // JSON already sent, emit error to stream so client can receive it

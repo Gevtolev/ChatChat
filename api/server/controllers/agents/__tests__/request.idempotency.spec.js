@@ -70,6 +70,7 @@ function buildRes() {
     headersSent: false,
     json: jest.fn(() => res),
     status: jest.fn(() => res),
+    set: jest.fn(() => res),
   };
   return res;
 }

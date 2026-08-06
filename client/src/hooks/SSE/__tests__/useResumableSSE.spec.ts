@@ -2014,6 +2014,105 @@ describe('useResumableSSE', () => {
     unmount();
   });
 
+  /**
+   * The fenced-terminal retry above is bounded only by the server eventually
+   * proving the negotiated protocol on `/chat/status`. A status snapshot that
+   * never carries the marker turns that bridge into an endless resume loop
+   * against an already-finished generation: FINAL parks the attachment, the
+   * re-subscribe 404s, and the 404 branch re-arms the same retry.
+   *
+   * Pinned as the consumer half of the `/chat/status` contract — the provider
+   * half (the route actually emitting the marker) is pinned by
+   * `api/server/routes/agents/__tests__/statusProtocol.spec.js`.
+   */
+  it('keeps resuming a finished generation while status never proves the negotiated protocol', async () => {
+    jest.useFakeTimers();
+    (request.post as jest.Mock).mockResolvedValue({
+      streamId: CONV_ID,
+      status: 'started',
+      generationCreatedAt: 1000,
+      generationProtocolVersion: 2,
+    });
+    /** A server that answers the v2 status read without echoing the marker. */
+    mockFetchStreamStatus.mockResolvedValue({ active: false });
+    const submission = buildSubmission();
+    const chatHelpers = buildChatHelpers();
+
+    const { unmount } = renderHook(() => useResumableSSE(submission, chatHelpers));
+    await flushMicrotasks();
+
+    const resumeUrl = `/api/agents/chat/stream/${CONV_ID}?resume=true&generationCreatedAt=1000&generationProtocolVersion=2`;
+    await act(async () => {
+      getLastSSE()._emit('message', {
+        data: JSON.stringify({
+          final: true,
+          generationProtocolVersion: 2,
+          conversation: { conversationId: CONV_ID },
+          requestMessage: submission.userMessage,
+          responseMessage: submission.initialResponse,
+        }),
+      });
+      await Promise.resolve();
+    });
+    await advanceRetryTimer(250);
+    expect(getLastSSE()._url).toBe(resumeUrl);
+
+    // Every cleaned-up job answers the resume with 404, and each 404 re-arms
+    // the same 1s retry: the loop has no convergence condition.
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const attached = mockSSEInstances.length;
+      await act(async () => {
+        getLastSSE()._emit('error', { responseCode: 404 });
+        await Promise.resolve();
+      });
+      await advanceRetryTimer(1_000);
+      expect(mockSSEInstances).toHaveLength(attached + 1);
+      expect(getLastSSE()._url).toBe(resumeUrl);
+    }
+
+    expect(mockFinalHandler).not.toHaveBeenCalled();
+    expect(mockSetRunEnd).not.toHaveBeenCalled();
+    unmount();
+  });
+
+  it('stops resuming a finished generation once status echoes the negotiated protocol', async () => {
+    jest.useFakeTimers();
+    (request.post as jest.Mock).mockResolvedValue({
+      streamId: CONV_ID,
+      status: 'started',
+      generationCreatedAt: 1000,
+      generationProtocolVersion: 2,
+    });
+    mockFetchStreamStatus.mockResolvedValue({ active: false, generationProtocolVersion: 2 });
+    const submission = buildSubmission();
+    const chatHelpers = buildChatHelpers();
+
+    const { unmount } = renderHook(() => useResumableSSE(submission, chatHelpers));
+    await flushMicrotasks();
+
+    const attached = mockSSEInstances.length;
+    await act(async () => {
+      getLastSSE()._emit('message', {
+        data: JSON.stringify({
+          final: true,
+          generationProtocolVersion: 2,
+          conversation: { conversationId: CONV_ID },
+          requestMessage: submission.userMessage,
+          responseMessage: submission.initialResponse,
+        }),
+      });
+      await Promise.resolve();
+    });
+    await advanceRetryTimer(30_000);
+
+    expect(mockFinalHandler).toHaveBeenCalledTimes(1);
+    expect(mockSetRunEnd).toHaveBeenCalledWith(
+      expect.objectContaining({ conversationId: CONV_ID, outcome: 'completed' }),
+    );
+    expect(mockSSEInstances).toHaveLength(attached);
+    unmount();
+  });
+
   it('hands a replaced start to the authoritative generation without attaching the stale submission', async () => {
     (request.post as jest.Mock).mockResolvedValue({
       status: 'replaced',

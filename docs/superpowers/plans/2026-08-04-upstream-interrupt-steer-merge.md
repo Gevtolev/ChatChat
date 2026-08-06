@@ -841,3 +841,36 @@ Task 7–9 必须连续完成，中途停下会留下半截 UI。
 > **2026-08-05 新增**。Task 9 已移植 `KeyboardShortcutsDialog`/`ShortcutRecorder`/`ShortcutKeyCombo`，唯独这个未移植——真实阻塞是本 fork `DeleteButton.tsx` 的 `DeleteButtonProps` 缺 `currentConversationId`（上游有），逐字节搬运会触发 TS 多余属性检查报错。
 
 需要：给 `DeleteButton.tsx` 加该 prop 并透传进 `DeleteConversationDialog`，再移植 `KeyboardDeleteDialog.tsx`（34 行）并在 `Root.tsx` 的 `KeyboardShortcutsProvider` 中渲染。完成后 `keyboardDeleteTarget` atom 才有消费方（当前写入后永无消费者）。同时更新 `Root.tsx` 那段 JSDoc。
+
+---
+
+## Task 16: 生成协议 v2 协商（`request.js` 接 `protocol.js`）
+
+> **2026-08-05 新增**，决策者批准。这是 Interrupt & Steer 工作的收尾项，在独立分支 `feat/steer-protocol-v2` 上做（基于 `feat/upstream-interrupt-steer`，PR #30 之上的 stacked PR）。
+
+**问题**：`api/server/controllers/agents/request.js` 对 `protocol.js` **零引用**，协商从未发生，生成协议永远退回 v1。实测前端有 **21 处 v2-only 分支**（`useResumableSSE.ts` 18 处 + `useSteering.ts` 3 处）全是死代码。
+
+**三个具体后果**：
+1. **无 `clientSteerId` 回执** —— `useSteering.ts:479-493` 靠回执把 steer 从「待确认」划掉。没有它，客户端只能靠 202 判断成功，**移动网络下 202 丢包 → 用户重按 → 服务端收到两条**。
+2. **恢复态 steer 认不出** —— `useSteering.ts:695` 用 `recoveryClientSteerId` 匹配「这条被 park 的 steer 就是我之前那条」。Task 13 正是卡在这里（接 parked-steer payload 消费要求 v2 已协商，硬接会 100% 抛错）。
+3. **收不到 `on_steer_updated`** —— steer 状态变化无实时反馈。
+
+**上游做法**（对拍 `git show upstream/dev:api/server/controllers/agents/request.js`）：
+
+```js
+const { GENERATION_PROTOCOL_HEADER, negotiateNewGenerationProtocol,
+        negotiateExistingGenerationProtocol } = require('./protocol');
+
+function sendGenerationJson(res, status, body, generationProtocolVersion) {
+  res.set(GENERATION_PROTOCOL_HEADER, String(generationProtocolVersion));
+  return res.status(status).json({ ...body, generationProtocolVersion });
+}
+```
+
+上游把**所有响应出口**换成 `sendGenerationJson`；新生成走 `negotiateNewGenerationProtocol`，已存在的走 `negotiateExistingGenerationProtocol`，协商结果写进 job metadata（`getJobGenerationProtocol` 从那儿读）。
+
+**环境事实**：`getServerGenerationProtocol` 在**无 Redis 时返回 V2**、有 Redis 时返回 V1（除非 `GENERATION_PROTOCOL_VERSION` 覆盖）。上游这个保守默认是为多实例滚动升级设计的；**我们生产是 Coolify 单容器，该顾虑不成立**，上线时可安全设 `GENERATION_PROTOCOL_VERSION=2`。本地开发无 Redis，接上后立刻是 v2，可即时真机验证。
+
+**风险**：高于此前所有任务 —— 改的是 `request.js` **所有响应出口**，那是每次对话的必经之路。缓解：上游有完整实现可逐字对拍，且本地能立刻端到端验证。
+
+**验收**：start 响应带 `generationProtocolVersion` 且本地为 2；`GENERATION_PROTOCOL_HEADER` 正确下发；前端 v2 分支激活（`clientSteerId` 回执可见）；五 workspace 失败集合 ⊆ 基准。

@@ -117,7 +117,11 @@ describe('Agent Abort Endpoint', () => {
           .send({ conversationId: jobStreamId });
 
         expect(response.status).toBe(200);
-        expect(response.body).toEqual({ success: true, aborted: jobStreamId });
+        expect(response.body).toEqual({
+          success: true,
+          aborted: jobStreamId,
+          generationProtocolVersion: 1,
+        });
         expect(mockGenerationJobManager.abortJob).toHaveBeenCalledWith(jobStreamId);
       });
 
@@ -140,7 +144,63 @@ describe('Agent Abort Endpoint', () => {
           .send({ conversationId: jobStreamId });
 
         expect(response.status).toBe(200);
-        expect(response.body).toEqual({ success: true, aborted: jobStreamId });
+        expect(response.body).toEqual({
+          success: true,
+          aborted: jobStreamId,
+          generationProtocolVersion: 1,
+        });
+      });
+    });
+
+    describe('Steer Recovery', () => {
+      it('echoes pendingSteers and the negotiated v2 protocol when the abort drains a queued steer', async () => {
+        const jobStreamId = 'test-stream-123';
+
+        mockGenerationJobManager.getJob.mockResolvedValue({
+          metadata: { userId: 'test-user-123', generationProtocolVersion: 2 },
+        });
+
+        mockGenerationJobManager.abortJob.mockResolvedValue({
+          success: true,
+          jobData: null,
+          content: [],
+          text: '',
+          pendingSteers: [{ steerId: 'steer-1', text: 'left over', createdAt: 1700000000000 }],
+        });
+
+        const response = await request(app)
+          .post('/api/agents/chat/abort')
+          .send({ conversationId: jobStreamId, generationProtocolVersion: 2 });
+
+        expect(response.status).toBe(200);
+        expect(response.body).toEqual({
+          success: true,
+          aborted: jobStreamId,
+          generationProtocolVersion: 2,
+          pendingSteers: [{ steerId: 'steer-1', text: 'left over', createdAt: 1700000000000 }],
+        });
+      });
+
+      it('omits pendingSteers when the abort drains nothing', async () => {
+        const jobStreamId = 'test-stream-123';
+
+        mockGenerationJobManager.getJob.mockResolvedValue({
+          metadata: { userId: 'test-user-123' },
+        });
+
+        mockGenerationJobManager.abortJob.mockResolvedValue({
+          success: true,
+          jobData: null,
+          content: [],
+          text: '',
+        });
+
+        const response = await request(app)
+          .post('/api/agents/chat/abort')
+          .send({ conversationId: jobStreamId });
+
+        expect(response.status).toBe(200);
+        expect(response.body.pendingSteers).toBeUndefined();
       });
     });
 
@@ -277,7 +337,11 @@ describe('Agent Abort Endpoint', () => {
 
         // Should still return success even if save fails
         expect(response.status).toBe(200);
-        expect(response.body).toEqual({ success: true, aborted: jobStreamId });
+        expect(response.body).toEqual({
+          success: true,
+          aborted: jobStreamId,
+          generationProtocolVersion: 1,
+        });
         expect(mockLogger.error).toHaveBeenCalledWith(
           expect.stringContaining('Failed to save partial response'),
         );
