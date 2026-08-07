@@ -389,10 +389,11 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
             },
           );
 
-        if (tenantId) {
-          await tenantStorage.run({ tenantId, userId }, savePartialMessage);
-        } else {
-          await savePartialMessage();
+        const savedPartialMessage = tenantId
+          ? await tenantStorage.run({ tenantId, userId }, savePartialMessage)
+          : await savePartialMessage();
+        if (!savedPartialMessage) {
+          throw new Error('Partial response could not be persisted after disconnect');
         }
 
         logger.debug(
@@ -542,10 +543,16 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
           interfaceConfig: req?.config?.interfaceConfig,
         };
 
-        if (!client.skipSaveUserMessage && userMessage) {
-          await saveMessage(reqCtx, userMessage, {
+        if (!client.skipSaveUserMessage) {
+          if (!userMessage) {
+            throw new Error('User message was unavailable before terminal persistence');
+          }
+          const savedUserMessage = await saveMessage(reqCtx, userMessage, {
             context: 'api/server/controllers/agents/request.js - resumable user message',
           });
+          if (!savedUserMessage) {
+            throw new Error('User message could not be persisted before terminal publication');
+          }
         }
         await commitRecoveredSteer();
 
