@@ -1,4 +1,4 @@
-const { logger } = require('@librechat/data-schemas');
+const { logger, tenantStorage } = require('@librechat/data-schemas');
 const { Constants, ViolationTypes } = require('librechat-data-provider');
 const {
   sendEvent,
@@ -118,6 +118,7 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
   } = req.body;
 
   const userId = req.user.id;
+  const tenantId = req.user.tenantId;
 
   // Idempotency: a lost/reset start-generation response makes the client re-POST the
   // identical payload, which would otherwise start a second fully-billed generation.
@@ -375,15 +376,25 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
           partialMessage.agent_id = req.body.agent_id;
         }
 
-        await saveMessage(
-          {
-            userId: req?.user?.id,
-            isTemporary: req?.body?.isTemporary,
-            interfaceConfig: req?.config?.interfaceConfig,
-          },
-          partialMessage,
-          { context: 'api/server/controllers/agents/request.js - partial response on disconnect' },
-        );
+        const savePartialMessage = () =>
+          saveMessage(
+            {
+              userId,
+              isTemporary: req?.body?.isTemporary,
+              interfaceConfig: req?.config?.interfaceConfig,
+            },
+            partialMessage,
+            {
+              context: 'api/server/controllers/agents/request.js - partial response on disconnect',
+            },
+          );
+
+        const savedPartialMessage = tenantId
+          ? await tenantStorage.run({ tenantId, userId }, savePartialMessage)
+          : await savePartialMessage();
+        if (!savedPartialMessage) {
+          throw new Error('Partial response could not be persisted after disconnect');
+        }
 
         logger.debug(
           `[ResumableAgentController] Saved partial response for ${streamId}, content parts: ${aggregatedContent.length}`,
@@ -532,10 +543,16 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
           interfaceConfig: req?.config?.interfaceConfig,
         };
 
-        if (!client.skipSaveUserMessage && userMessage) {
-          await saveMessage(reqCtx, userMessage, {
+        if (!client.skipSaveUserMessage) {
+          if (!userMessage) {
+            throw new Error('User message was unavailable before terminal persistence');
+          }
+          const savedUserMessage = await saveMessage(reqCtx, userMessage, {
             context: 'api/server/controllers/agents/request.js - resumable user message',
           });
+          if (!savedUserMessage) {
+            throw new Error('User message could not be persisted before terminal publication');
+          }
         }
         await commitRecoveredSteer();
 
