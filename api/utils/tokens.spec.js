@@ -1471,6 +1471,46 @@ describe('Claude Model Tests', () => {
     });
   });
 
+  it('should return correct context length for Claude Opus 4.8 (1M)', () => {
+    expect(getModelMaxTokens('claude-opus-4-8', EModelEndpoint.anthropic)).toBe(1000000);
+    expect(getModelMaxTokens('claude-opus-4-8')).toBe(1000000);
+  });
+
+  it('should match model names correctly for Claude Opus 4.8', () => {
+    const modelVariations = [
+      'claude-opus-4-8',
+      'claude-opus-4-8-20260601',
+      'claude-opus-4-8-latest',
+      'anthropic/claude-opus-4-8',
+      'claude-opus-4-8/anthropic',
+      'claude-opus-4-8-preview',
+    ];
+
+    modelVariations.forEach((model) => {
+      expect(matchModelName(model, EModelEndpoint.anthropic)).toBe('claude-opus-4-8');
+    });
+  });
+
+  it('should return correct context length for Claude Opus 5 (1M)', () => {
+    expect(getModelMaxTokens('claude-opus-5', EModelEndpoint.anthropic)).toBe(1000000);
+    expect(getModelMaxTokens('claude-opus-5')).toBe(1000000);
+  });
+
+  it('should match model names correctly for Claude Opus 5', () => {
+    const modelVariations = [
+      'claude-opus-5',
+      'claude-opus-5-20260701',
+      'claude-opus-5-latest',
+      'anthropic/claude-opus-5',
+      'claude-opus-5/anthropic',
+      'claude-opus-5-preview',
+    ];
+
+    modelVariations.forEach((model) => {
+      expect(matchModelName(model, EModelEndpoint.anthropic)).toBe('claude-opus-5');
+    });
+  });
+
   it('should return correct context length for Claude Sonnet 4.6 (1M)', () => {
     expect(getModelMaxTokens('claude-sonnet-4-6', EModelEndpoint.anthropic)).toBe(
       maxTokensMap[EModelEndpoint.anthropic]['claude-sonnet-4-6'],

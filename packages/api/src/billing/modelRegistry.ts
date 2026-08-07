@@ -40,6 +40,7 @@ export const MODEL_REGISTRY: Record<string, ModelEntry> = {
   'claude-opus-4-6': { cost_tier: 'expensive' },
   'claude-opus-4-7': { cost_tier: 'expensive' },
   'claude-opus-4-8': { cost_tier: 'expensive' },
+  'claude-opus-5': { cost_tier: 'expensive' },
 
   // xAI — Grok family
   'grok-4-1-fast': { cost_tier: 'cheap' },
@@ -61,9 +62,32 @@ export const MODEL_REGISTRY: Record<string, ModelEntry> = {
   'minimax-m3': { cost_tier: 'mid' },
 };
 
+/**
+ * Finds the longest registry key contained in `modelId`. Providers append release-date
+ * suffixes to the raw model id they send (e.g. `claude-opus-4-5-20251101`) that don't match
+ * the curated, undated registry key (`claude-opus-4-5`) exactly.
+ */
+function findRegistryKey(modelId: string): string | undefined {
+  if (MODEL_REGISTRY[modelId]) {
+    return modelId;
+  }
+  const lowerModelId = modelId.toLowerCase();
+  let bestMatch: string | undefined;
+  let bestLength = 0;
+  for (const key of Object.keys(MODEL_REGISTRY)) {
+    const lowerKey = key.toLowerCase();
+    if (lowerKey.length > bestLength && lowerModelId.includes(lowerKey)) {
+      bestMatch = key;
+      bestLength = lowerKey.length;
+    }
+  }
+  return bestMatch;
+}
+
 /** Returns the cost tier for a model ID. Falls back to 'mid' and warns for unknown models. */
 export function getModelTier(modelId: string): CostTier {
-  const entry = MODEL_REGISTRY[modelId];
+  const registryKey = findRegistryKey(modelId);
+  const entry = registryKey ? MODEL_REGISTRY[registryKey] : undefined;
   if (!entry) {
     logger.warn('[modelRegistry] unknown model, defaulting to mid tier', modelId);
     return 'mid';
