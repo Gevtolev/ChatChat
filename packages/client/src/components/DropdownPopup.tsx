@@ -18,6 +18,7 @@ interface DropdownProps {
   gutter?: number;
   modal?: boolean;
   portal?: boolean;
+  portalElement?: HTMLElement | null;
   preserveTabOrder?: boolean;
   focusLoop?: boolean;
   menuId: string;
