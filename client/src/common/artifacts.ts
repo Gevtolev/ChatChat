@@ -4,6 +4,8 @@ export interface CodeBlock {
   content: string;
 }
 
+export const MERMAID_ARTIFACT_TYPE = 'application/vnd.mermaid' as const;
+
 export interface Artifact {
   id: string;
   lastUpdateTime: number;
