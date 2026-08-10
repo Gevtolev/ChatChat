@@ -12,6 +12,7 @@ const {
   SET_MEMORY_TOOL_NAME,
   buildWebSearchContext,
   DELETE_MEMORY_TOOL_NAME,
+  resolveWebSearchSSRFAgents,
   buildWebSearchDynamicContext,
 } = require('@librechat/api');
 const {
@@ -334,6 +335,10 @@ const loadTools = async ({
         webSearchConfig: webSearch,
       });
       const { onSearchResults, onGetHighlights } = options?.[Tools.web_search] ?? {};
+      const { httpAgent, httpsAgent } = resolveWebSearchSSRFAgents(
+        result.authResult,
+        webSearch?.allowedAddresses,
+      );
       requestedTools[tool] = async () => {
         toolContextMap[tool] = buildWebSearchContext();
         dynamicToolContextMap[tool] = buildWebSearchDynamicContext(
@@ -341,6 +346,8 @@ const loadTools = async ({
         );
         return createSearchTool({
           ...result.authResult,
+          httpAgent,
+          httpsAgent,
           onSearchResults,
           onGetHighlights,
           logger,
