@@ -529,11 +529,20 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
 
         // Check abort state BEFORE calling completeJob (which triggers abort signal for cleanup)
         const wasAbortedBeforeComplete = job.abortController.signal.aborted;
+        /** A turn sealed at an empty preempt boundary carries no usable answer,
+         * so titling it would name the conversation after nothing and burn a
+         * `gen_title` long-poll doing it. Optional chaining keeps this inert for
+         * clients whose run never exposes the accessors. */
+        const preemptStats = client?.run?.getPreemptStats?.();
+        const preemptIncomplete =
+          (preemptStats?.emptyBoundaries ?? 0) > 0 ||
+          client?.run?.getHaltReason?.() === 'preempt_incomplete';
         const shouldGenerateTitle =
           addTitle &&
           parentMessageId === Constants.NO_PARENT &&
           isNewConvo &&
-          !wasAbortedBeforeComplete;
+          !wasAbortedBeforeComplete &&
+          !preemptIncomplete;
 
         // Save user message BEFORE sending final event to avoid race condition
         // where client refetch happens before database is updated
