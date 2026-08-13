@@ -16,6 +16,7 @@ const {
   GENERATION_PROTOCOL_HEADER,
   getRequestedGenerationProtocol,
   getServerGenerationProtocol,
+  negotiateNewGenerationProtocol,
   negotiateExistingGenerationProtocol,
 } = require('~/server/controllers/agents/protocol');
 const { saveMessage } = require('~/models');
@@ -29,6 +30,20 @@ const { LIMIT_MESSAGE_IP, LIMIT_MESSAGE_USER } = process.env ?? {};
 /** Untenanted jobs (pre-multi-tenancy) remain accessible if the userId check passes. */
 function hasTenantMismatch(job, user) {
   return job.metadata?.tenantId != null && job.metadata.tenantId !== user.tenantId;
+}
+
+/** Stamps a JSON envelope with the protocol the caller is entitled to see. */
+function sendGenerationJson(res, status, body, generationProtocolVersion) {
+  res.set(GENERATION_PROTOCOL_HEADER, String(generationProtocolVersion));
+  return res.status(status).json({ ...body, generationProtocolVersion });
+}
+
+/** Protocol for envelopes sent BEFORE a job is authorized (validation,
+ * not-found, unauthorized). Derived from the request and this server's own
+ * capability only, so it never leaks an existing job's marker to a caller who
+ * has not been shown to own it. */
+function negotiateRequestGenerationProtocol(req) {
+  return negotiateNewGenerationProtocol(req, GenerationJobManager);
 }
 
 /**
@@ -102,24 +117,91 @@ router.use('/', v1);
 router.get('/chat/stream/:streamId', async (req, res) => {
   const { streamId } = req.params;
   const isResume = req.query.resume === 'true';
+  const requestProtocolVersion = negotiateRequestGenerationProtocol(req);
 
-  const job = await GenerationJobManager.getJob(streamId);
-  if (!job) {
-    return res.status(404).json({
-      error: 'Stream not found',
-      message: 'The generation job does not exist or has expired.',
-    });
+  /** Coercing this away (`Number('abc') === NaN`) would collapse the identity
+   * fence below back to "attach to whatever currently occupies this id". */
+  const rawGenerationCreatedAt = req.query.generationCreatedAt;
+  let expectedGenerationCreatedAt;
+  if (rawGenerationCreatedAt != null) {
+    if (
+      typeof rawGenerationCreatedAt !== 'string' ||
+      !/^\d+$/.test(rawGenerationCreatedAt) ||
+      !Number.isSafeInteger(Number(rawGenerationCreatedAt))
+    ) {
+      return sendGenerationJson(
+        res,
+        400,
+        { error: 'Invalid generation identity' },
+        requestProtocolVersion,
+      );
+    }
+    expectedGenerationCreatedAt = Number(rawGenerationCreatedAt);
   }
 
-  if (job.metadata?.userId && job.metadata.userId !== req.user.id) {
-    return res.status(403).json({ error: 'Unauthorized' });
+  let result;
+  const attachmentAbortController = new AbortController();
+  req.on('close', () => {
+    logger.debug(`[AgentStream] Client disconnected from ${streamId}`);
+    attachmentAbortController.abort();
+    result?.unsubscribe();
+  });
+
+  const job = await GenerationJobManager.getJob(streamId);
+  if (attachmentAbortController.signal.aborted) {
+    return;
+  }
+  if (!job) {
+    return sendGenerationJson(
+      res,
+      404,
+      {
+        error: 'Stream not found',
+        message: 'The generation job does not exist or has expired.',
+      },
+      requestProtocolVersion,
+    );
+  }
+
+  /** Every job has an owner at creation time (`createJob` rejects an empty user
+   * id). Treat a missing/corrupt owner as unauthorized anyway, so corrupted
+   * store state cannot become a public stream for anyone who knows the
+   * conversation id. */
+  if (job.metadata?.userId !== req.user.id) {
+    return sendGenerationJson(res, 403, { error: 'Unauthorized' }, requestProtocolVersion);
   }
 
   if (hasTenantMismatch(job, req.user)) {
-    return res.status(403).json({ error: 'Unauthorized' });
+    return sendGenerationJson(res, 403, { error: 'Unauthorized' }, requestProtocolVersion);
   }
 
   const generationProtocolVersion = negotiateExistingGenerationProtocol(req, job);
+
+  if (expectedGenerationCreatedAt != null && job.createdAt !== expectedGenerationCreatedAt) {
+    /** streamId is conversation-scoped and may now belong to a newer turn. A
+     * stale start/reconnect gets a dedicated handoff signal instead of being
+     * attached to a generation this request never authorized. */
+    return sendGenerationJson(
+      res,
+      409,
+      {
+        code: 'GENERATION_REPLACED',
+        error: 'Generation replaced',
+        message: 'The requested generation has completed or was replaced.',
+      },
+      generationProtocolVersion,
+    );
+  }
+
+  /** Pin even legacy (unfenced-query) subscribers to the exact job snapshot
+   * that passed the checks above: a replacement can otherwise land between
+   * this authorization read and the manager attachment, exposing the
+   * replacement generation without ever authorizing its owner. */
+  const authorizedGenerationCreatedAt = job.createdAt;
+  if (!Number.isSafeInteger(authorizedGenerationCreatedAt) || authorizedGenerationCreatedAt < 0) {
+    logger.warn(`[AgentStream] Refusing stream with invalid generation identity: ${streamId}`);
+    return sendGenerationJson(res, 403, { error: 'Unauthorized' }, requestProtocolVersion);
+  }
 
   const streamTelemetry = createSseStreamTelemetry({ req, res, streamId, isResume });
 
@@ -168,16 +250,17 @@ router.get('/chat/stream/:streamId', async (req, res) => {
     }
   };
 
-  let result;
-
   if (isResume) {
     const { subscription, resumeState, pendingEvents } =
-      await GenerationJobManager.subscribeWithResume(streamId, writeEvent, onDone, onError);
+      await GenerationJobManager.subscribeWithResume(streamId, writeEvent, onDone, onError, {
+        signal: attachmentAbortController.signal,
+        expectedCreatedAt: authorizedGenerationCreatedAt,
+      });
 
-    if (!res.writableEnded) {
+    if (subscription && !attachmentAbortController.signal.aborted && !res.writableEnded) {
       if (resumeState) {
         writeEvent({ sync: true, resumeState, pendingEvents });
-        GenerationJobManager.markSyncSent(streamId);
+        GenerationJobManager.markSyncSent(streamId, authorizedGenerationCreatedAt);
         logger.debug(
           `[AgentStream] Sent sync event for ${streamId} with ${resumeState.runSteps.length} run steps, ${pendingEvents.length} pending events`,
         );
@@ -189,11 +272,21 @@ router.get('/chat/stream/:streamId', async (req, res) => {
           `[AgentStream] Resume state null for ${streamId}, replayed ${pendingEvents.length} gap events directly`,
         );
       }
+      /** `subscribeWithResume` attaches live delivery PAUSED so nothing can
+       *  race ahead of the sync frame written above. Releasing it is the
+       *  caller's job: skip this and the reconnecting client receives the
+       *  snapshot and then nothing at all -- no deltas, no FINAL, no close. */
+      subscription.activate();
+    } else {
+      subscription?.unsubscribe();
     }
 
     result = subscription;
   } else {
-    result = await GenerationJobManager.subscribe(streamId, writeEvent, onDone, onError);
+    result = await GenerationJobManager.subscribe(streamId, writeEvent, onDone, onError, {
+      signal: attachmentAbortController.signal,
+      expectedCreatedAt: authorizedGenerationCreatedAt,
+    });
   }
 
   if (!result) {
@@ -201,11 +294,6 @@ router.get('/chat/stream/:streamId', async (req, res) => {
     onError('Failed to subscribe to stream');
     return;
   }
-
-  req.on('close', () => {
-    logger.debug(`[AgentStream] Client disconnected from ${streamId}`);
-    result.unsubscribe();
-  });
 });
 
 /**
