@@ -101,6 +101,7 @@ describe('SSE stream tenant isolation', () => {
       mockGenerationJobManager.getJob.mockResolvedValue({
         metadata: { userId: 'user-123', tenantId: 'tenant-a' },
         status: 'running',
+        createdAt: 1000,
       });
 
       const res = await request(app).get('/agents/chat/stream/stream-123');
@@ -116,6 +117,7 @@ describe('SSE stream tenant isolation', () => {
       mockGenerationJobManager.getJob.mockResolvedValue({
         metadata: { userId: 'user-123' },
         status: 'running',
+        createdAt: 1000,
       });
 
       const res = await request(app).get('/agents/chat/stream/stream-123');
