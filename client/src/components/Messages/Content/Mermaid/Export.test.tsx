@@ -34,6 +34,16 @@ describe('MermaidExport', () => {
     mockDownloadMermaidSvg.mockReset();
   });
 
+  /** `restoreTriggerFocus` refocuses through `requestAnimationFrame`. A case
+   *  that ends while that frame is still queued lets the callback fire during
+   *  the NEXT case, stealing focus mid-assertion and collapsing the menu it
+   *  had just reopened. Drain the queue so each case starts settled. */
+  afterEach(async () => {
+    await act(async () => {
+      await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
+    });
+  });
+
   it('renders the menu inside the fullscreen element when one is given', async () => {
     const user = userEvent.setup();
     const fullscreenHost = document.createElement('div');

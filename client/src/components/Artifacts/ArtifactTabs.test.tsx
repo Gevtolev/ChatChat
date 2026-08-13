@@ -1,6 +1,7 @@
 import React from 'react';
 import * as Tabs from '@radix-ui/react-tabs';
-import { render, waitFor } from '@testing-library/react';
+import { RecoilRoot } from 'recoil';
+import { render as rtlRender, waitFor } from '@testing-library/react';
 import type { SandpackPreviewRef } from '@codesandbox/sandpack-react/unstyled';
 import type { Artifact } from '~/common';
 import ArtifactTabs from './ArtifactTabs';
@@ -69,6 +70,12 @@ jest.mock('~/hooks/Artifacts/useArtifactProps', () => ({
   __esModule: true,
   default: () => ({ files: {}, fileKey: 'diagram.mmd', template: 'static', sharedProps: {} }),
 }));
+
+/** This fork's `useLocalize` still reads the language atom, so anything that
+ *  renders it needs a Recoil provider; upstream's hook has no store dependency,
+ *  which is why the original spec renders bare. */
+const render = ((ui, options) =>
+  rtlRender(ui, { wrapper: RecoilRoot, ...options })) as typeof rtlRender;
 
 const preview: SandpackPreviewRef = Object.create(null);
 const previewRef: React.MutableRefObject<SandpackPreviewRef> = { current: preview };
@@ -314,7 +321,11 @@ describe('ArtifactTabs Mermaid editing', () => {
       'preview',
     );
 
-    await waitFor(() => expect(mockUseGetStartupConfig).toHaveBeenCalledWith({ enabled: true }));
+    /** Upstream gates this on `{ enabled: !shouldUseSharedConfig }` because it
+     *  can fall back to a shared conversation's own config via
+     *  `useGetSharedStartupConfig`, which this fork has not ported — so the
+     *  sandbox path here always reads the viewer's config unconditionally. */
+    await waitFor(() => expect(mockUseGetStartupConfig).toHaveBeenCalled());
     expect(testGlobal.artifactPreviewModuleEvaluations).toBe(1);
   });
 });
