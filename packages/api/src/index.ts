@@ -1,4 +1,5 @@
 export * from './app';
+export * from './artifacts';
 /* Billing */
 export * from './billing/plans';
 export * from './billing/applyPlanChange';
