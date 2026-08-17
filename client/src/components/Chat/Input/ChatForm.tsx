@@ -25,7 +25,7 @@ import {
 import PendingManualSkillsChips from './PendingManualSkillsChips';
 import InterruptSteerButton from './InterruptSteerButton';
 import DuringRunSendButton from './DuringRunSendButton';
-import { cn, getModelSpec, removeFocusRings } from '~/utils';
+import { cn, getModelSpec, hasIncompleteFiles, removeFocusRings } from '~/utils';
 import { useGetStartupConfig } from '~/data-provider';
 import { mainTextareaId, BadgeItem } from '~/common';
 import PendingSteerChips from './PendingSteerChips';
@@ -54,7 +54,6 @@ interface ChatFormProps {
   setFiles: FileSetter;
   conversation: TConversation | null;
   isSubmitting: boolean;
-  filesLoading: boolean;
   setFilesLoading: React.Dispatch<React.SetStateAction<boolean>>;
   newConversation: ConvoGenerator;
   handleStopGenerating: (e: React.MouseEvent<HTMLButtonElement>) => void;
@@ -68,7 +67,6 @@ const ChatForm = memo(function ChatForm({
   setFiles,
   conversation,
   isSubmitting,
-  filesLoading,
   setFilesLoading,
   newConversation,
   handleStopGenerating,
@@ -118,6 +116,7 @@ const ChatForm = memo(function ChatForm({
     [conversation?.spec, startupConfig],
   );
   const hideBadgeRow = modelSpec?.hideBadgeRow === true;
+  const filesLoading = useMemo(() => hasIncompleteFiles(files), [files]);
   const conversationId = useMemo(
     () => conversation?.conversationId ?? Constants.NEW_CONVO,
     [conversation?.conversationId],
@@ -670,7 +669,6 @@ function ChatFormWrapper({ index = 0, placeholder }: { index?: number; placehold
     setFiles,
     conversation,
     isSubmitting,
-    filesLoading,
     setFilesLoading,
     newConversation,
     handleStopGenerating,
@@ -728,7 +726,6 @@ function ChatFormWrapper({ index = 0, placeholder }: { index?: number; placehold
       setFiles={setFiles}
       conversation={stableConversation}
       isSubmitting={isSubmitting}
-      filesLoading={filesLoading}
       setFilesLoading={setFilesLoading}
       newConversation={stableNewConversation}
       handleStopGenerating={stableHandleStop}
