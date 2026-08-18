@@ -87,10 +87,59 @@ export function createQuotaMethods(mongoose: typeof import('mongoose')) {
     return Quota.findOneAndUpdate(filter, update, { new: true }).lean<IQuotaLean>();
   }
 
+  /**
+   * Remaining tokenCredits for a user, or `null` when no Balance row exists.
+   *
+   * Read-only on purpose: the gate calls this before a generation, while the
+   * charge happens in `spendTokens` afterwards, once real token counts are
+   * known. Callers must treat `null` as "no credits" rather than "unlimited" —
+   * a user whose grant never landed should be asked to upgrade, not handed
+   * free capacity.
+   */
+  async function getBalanceCredits(userId: Types.ObjectId): Promise<number | null> {
+    const Balance = mongoose.models.Balance as Model<{
+      user: Types.ObjectId;
+      tokenCredits: number;
+    }>;
+    const doc = await Balance.findOne({ user: userId }).select('tokenCredits').lean();
+    return doc == null ? null : (doc.tokenCredits ?? 0);
+  }
+
+  /**
+   * Sets a user's balance to their plan's monthly grant and arms Balance's own
+   * auto-refill to re-grant the same amount every month.
+   *
+   * `$set` rather than `$inc`: the subscription sells a monthly allowance, not
+   * a stored balance, so an unused month must not carry over. Upserts, because
+   * a user reaching their first plan change has no Balance row yet.
+   */
+  async function grantMonthlyCredits(args: {
+    userId: Types.ObjectId;
+    credits: number;
+  }): Promise<void> {
+    const Balance = mongoose.models.Balance as Model<Record<string, unknown>>;
+    await Balance.updateOne(
+      { user: args.userId },
+      {
+        $set: {
+          tokenCredits: args.credits,
+          autoRefillEnabled: true,
+          refillIntervalValue: 1,
+          refillIntervalUnit: 'months',
+          refillAmount: args.credits,
+          lastRefill: new Date(),
+        },
+      },
+      { upsert: true },
+    );
+  }
+
   return {
     createQuota,
     incrementQuota,
     resetQuota,
+    getBalanceCredits,
+    grantMonthlyCredits,
   };
 }
 

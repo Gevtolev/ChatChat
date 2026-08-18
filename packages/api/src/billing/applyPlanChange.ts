@@ -32,6 +32,9 @@ export interface PlanChangeResult {
 export interface PlanChangeDeps {
   getActiveSubscriptionRecord: (userId: Types.ObjectId) => Promise<ISubscriptionLean | null>;
   expireActiveSubscriptions: (userId: Types.ObjectId) => Promise<unknown>;
+  /** Sets the balance to the plan's grant and arms monthly auto-refill. Sets
+   *  rather than increments, so an unused month does not carry over. */
+  grantMonthlyCredits: (args: { userId: Types.ObjectId; credits: number }) => Promise<unknown>;
   createSubscription: (args: {
     userId: Types.ObjectId;
     planCode: PlanCode;
@@ -161,6 +164,21 @@ export async function applyPlanChange(
     userId: user_id,
     periodStart,
   });
+
+  /**
+   * Step 5: Grant the plan's monthly credits and arm Balance's own auto-refill.
+   *
+   * Monthly reset rides on Balance rather than on a quota period: `spendTokens`
+   * already draws down `tokenCredits` after every generation, and its refill
+   * machinery re-grants on a schedule without a cron job. Setting the balance
+   * outright (rather than incrementing) is what makes the grant non-cumulative
+   * — an unused month does not roll over, which is the subscription semantics
+   * we sell.
+   */
+  const credits = PLANS[plan_code].monthly_token_credits;
+  if (credits > 0) {
+    await deps.grantMonthlyCredits({ userId: user_id, credits });
+  }
 
   // TODO(stage5): emit plan_changed PostHog event { from: previous_plan, to: plan_code, source }
 
