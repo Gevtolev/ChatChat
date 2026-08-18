@@ -530,6 +530,14 @@ export interface UsageMetadata {
    */
   cache_read_input_tokens?: number;
   /**
+   * OpenAI-compatible cache read tokens, as returned by proxies that speak the
+   * OpenAI wire format rather than a provider's native one — OpenRouter, which
+   * this fork routes most models through, reports cache hits only here.
+   */
+  prompt_tokens_details?: {
+    cached_tokens?: number;
+  };
+  /**
    * Breakdown of output token counts. Per the LangChain core contract,
    * `output_tokens` is the sum of all output token types — these fields
    * are subsets of `output_tokens`, *not* additional charges.
