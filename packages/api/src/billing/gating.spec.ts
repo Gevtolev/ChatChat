@@ -3,6 +3,15 @@ import { MongoMemoryServer } from 'mongodb-memory-server';
 import { createModels, createMethods } from '@librechat/data-schemas';
 import { applyPlanChange } from './applyPlanChange';
 import { checkBillingAccess } from './gating';
+import { PLANS } from './plans';
+
+type BalanceDoc = {
+  tokenCredits: number;
+  autoRefillEnabled: boolean;
+  refillIntervalUnit: string;
+  refillIntervalValue: number;
+  refillAmount: number;
+};
 
 jest.mock('@librechat/data-schemas', () => ({
   ...jest.requireActual('@librechat/data-schemas'),
@@ -19,12 +28,14 @@ function buildApplyDeps() {
     expireActiveSubscriptions: m.expireActiveSubscriptions,
     createSubscription: m.createSubscription,
     createQuota: m.createQuota,
+    grantMonthlyCredits: m.grantMonthlyCredits,
   };
 }
 
 function buildGatingDeps() {
   return {
     getActiveSubscriptionRecord: methods.getActiveSubscriptionRecord,
+    getBalanceCredits: methods.getBalanceCredits,
     incrementQuota: methods.incrementQuota,
   };
 }
@@ -71,22 +82,15 @@ describe('checkBillingAccess — model tier gating', () => {
     );
   });
 
-  test('free user + cheap model 3× passes, 4th throws upgrade_required_quota', async () => {
+  test('a credit-metered user with no balance row is denied, not given free capacity', async () => {
+    expect.assertions(2);
+    /** A `free` user who never went through `applyPlanChange` has no Balance
+     *  document. Reading that as "unlimited" would hand out the most expensive
+     *  models for nothing, so the gate must treat a missing row as zero. */
     const userId = new mongoose.Types.ObjectId();
-    const deps = buildGatingDeps();
-
-    await expect(
-      checkBillingAccess({ userId, modelId: 'gpt-5.4-mini' }, deps),
-    ).resolves.toBeUndefined();
-    await expect(
-      checkBillingAccess({ userId, modelId: 'gpt-5.4-mini' }, deps),
-    ).resolves.toBeUndefined();
-    await expect(
-      checkBillingAccess({ userId, modelId: 'gpt-5.4-mini' }, deps),
-    ).resolves.toBeUndefined();
 
     await expectDenied(
-      checkBillingAccess({ userId, modelId: 'gpt-5.4-mini' }, deps),
+      checkBillingAccess({ userId, modelId: 'gpt-5.4-mini' }, buildGatingDeps()),
       'upgrade_required_quota',
     );
   });
@@ -223,6 +227,12 @@ describe('checkBillingAccess — payload shape', () => {
 
   test('upgrade_required_quota error includes used and limit', async () => {
     const userId = new mongoose.Types.ObjectId();
+    /** Anonymous is the message-counted plan, so its payload carries the
+     *  message cap; credit-metered plans report their credit grant instead. */
+    await applyPlanChange(
+      { user_id: userId, plan_code: 'anonymous', source: 'system_default' },
+      buildApplyDeps(),
+    );
     const deps = buildGatingDeps();
 
     for (let i = 0; i < 3; i++) {
@@ -246,61 +256,51 @@ describe('checkBillingAccess — payload shape', () => {
   });
 });
 
-describe('checkBillingAccess — quota period semantics', () => {
-  afterEach(() => {
-    jest.useRealTimers();
-  });
-
-  test('lifetime plan (free) does not reset across a day boundary', async () => {
+describe('checkBillingAccess — the anonymous trial is not credit-metered', () => {
+  /** The visitor trial is a product rule expressed in messages, so it survives
+   *  the billing escape hatch and never consults a Balance row — an anonymous
+   *  visitor has none. It also must not reset: a lifetime counter, not a period. */
+  test('anonymous is capped at three messages and does not reset', async () => {
     expect.assertions(2);
-    // Fake only Date — leave real timers/sockets alone so mongoose's async
-    // connection machinery (which relies on real setTimeout/setImmediate)
-    // keeps working while `new Date()` inside resolvePeriodStart is frozen.
-    jest.useFakeTimers({
-      doNotFake: [
-        'nextTick',
-        'setImmediate',
-        'clearImmediate',
-        'setInterval',
-        'clearInterval',
-        'setTimeout',
-        'clearTimeout',
-      ],
-    });
-    jest.setSystemTime(new Date('2026-01-01T23:00:00Z'));
     const userId = new mongoose.Types.ObjectId();
+    await applyPlanChange(
+      { user_id: userId, plan_code: 'anonymous', source: 'system_default' },
+      buildApplyDeps(),
+    );
     const deps = buildGatingDeps();
 
     for (let i = 0; i < 3; i++) {
       await checkBillingAccess({ userId, modelId: 'gpt-5.4-mini' }, deps);
     }
 
-    // Cross midnight into the next day.
-    jest.setSystemTime(new Date('2026-01-02T01:00:00Z'));
-
-    // Free plan's lifetime quota (3) is already used up — a new day must not reset it.
     await expectDenied(
       checkBillingAccess({ userId, modelId: 'gpt-5.4-mini' }, deps),
       'upgrade_required_quota',
     );
   });
 
-  test('daily plan (pro) resets after crossing a day boundary', async () => {
-    // Fake only Date — leave real timers/sockets alone so mongoose's async
-    // connection machinery (which relies on real setTimeout/setImmediate)
-    // keeps working while `new Date()` inside resolvePeriodStart is frozen.
-    jest.useFakeTimers({
-      doNotFake: [
-        'nextTick',
-        'setImmediate',
-        'clearImmediate',
-        'setInterval',
-        'clearInterval',
-        'setTimeout',
-        'clearTimeout',
-      ],
-    });
-    jest.setSystemTime(new Date('2026-01-01T23:00:00Z'));
+  test('anonymous never reads a balance', async () => {
+    const userId = new mongoose.Types.ObjectId();
+    await applyPlanChange(
+      { user_id: userId, plan_code: 'anonymous', source: 'system_default' },
+      buildApplyDeps(),
+    );
+    const getBalanceCredits = jest.fn();
+    await checkBillingAccess(
+      { userId, modelId: 'gpt-5.4-mini' },
+      { ...buildGatingDeps(), getBalanceCredits },
+    );
+    expect(getBalanceCredits).not.toHaveBeenCalled();
+  });
+});
+
+describe('checkBillingAccess — balance-driven quota', () => {
+  /** Credits are the metering unit now: a plan's monthly grant lands in the
+   *  user's Balance and `spendTokens` draws it down after each generation.
+   *  The gate here only asks whether anything is left — it must not consume
+   *  quota of its own, or a turn would be charged twice. */
+  test('denies once the balance is exhausted', async () => {
+    expect.assertions(3);
     const userId = new mongoose.Types.ObjectId();
     await applyPlanChange(
       { user_id: userId, plan_code: 'pro_m', source: 'admin' },
@@ -308,18 +308,48 @@ describe('checkBillingAccess — quota period semantics', () => {
     );
     const deps = buildGatingDeps();
 
-    for (let i = 0; i < 100; i++) {
-      await checkBillingAccess({ userId, modelId: 'gpt-5.4-mini' }, deps);
-    }
+    await expect(
+      checkBillingAccess({ userId, modelId: 'gpt-5.4-mini' }, deps),
+    ).resolves.toBeUndefined();
+
+    await mongoose.models.Balance.updateOne({ user: userId }, { $set: { tokenCredits: 0 } });
+
     await expectDenied(
       checkBillingAccess({ userId, modelId: 'gpt-5.4-mini' }, deps),
       'upgrade_required_quota',
     );
+  });
 
-    // Cross midnight into the next day — the daily quota should have reset.
-    jest.setSystemTime(new Date('2026-01-02T01:00:00Z'));
-    await expect(
-      checkBillingAccess({ userId, modelId: 'gpt-5.4-mini' }, deps),
-    ).resolves.toBeUndefined();
+  test("a plan change grants that plan's monthly credits", async () => {
+    const userId = new mongoose.Types.ObjectId();
+    await applyPlanChange(
+      { user_id: userId, plan_code: 'pro_m', source: 'admin' },
+      buildApplyDeps(),
+    );
+
+    const balance = await mongoose.models.Balance.findOne({ user: userId }).lean<BalanceDoc>();
+    expect(balance?.tokenCredits).toBe(PLANS.pro_m.monthly_token_credits);
+    /** Monthly reset is Balance's own auto-refill, not a quota period. */
+    expect(balance?.autoRefillEnabled).toBe(true);
+    expect(balance?.refillIntervalUnit).toBe('months');
+    expect(balance?.refillIntervalValue).toBe(1);
+    expect(balance?.refillAmount).toBe(PLANS.pro_m.monthly_token_credits);
+  });
+
+  test('the gate does not itself consume credits', async () => {
+    const userId = new mongoose.Types.ObjectId();
+    await applyPlanChange(
+      { user_id: userId, plan_code: 'pro_m', source: 'admin' },
+      buildApplyDeps(),
+    );
+    const deps = buildGatingDeps();
+
+    const before = await mongoose.models.Balance.findOne({ user: userId }).lean<BalanceDoc>();
+    for (let i = 0; i < 5; i++) {
+      await checkBillingAccess({ userId, modelId: 'gpt-5.4-mini' }, deps);
+    }
+    const after = await mongoose.models.Balance.findOne({ user: userId }).lean<BalanceDoc>();
+
+    expect(after?.tokenCredits).toBe(before?.tokenCredits);
   });
 });

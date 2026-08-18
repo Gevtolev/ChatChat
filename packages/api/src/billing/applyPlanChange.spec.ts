@@ -22,6 +22,7 @@ function buildDeps() {
     expireActiveSubscriptions: methods.expireActiveSubscriptions,
     createSubscription: methods.createSubscription,
     createQuota: methods.createQuota,
+    grantMonthlyCredits: methods.grantMonthlyCredits,
   };
 }
 

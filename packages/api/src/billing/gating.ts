@@ -1,5 +1,4 @@
 import type { Types } from 'mongoose';
-import type { PlanConfig } from 'librechat-data-provider';
 import type { ISubscriptionLean, IQuotaLean } from '@librechat/data-schemas';
 import { getActiveSubscription } from './applyPlanChange';
 import { isEnabled } from '~/utils';
@@ -9,6 +8,13 @@ import type { FeatureKey } from './modelRegistry';
 
 export interface GatingDeps {
   getActiveSubscriptionRecord: (userId: Types.ObjectId) => Promise<ISubscriptionLean | null>;
+  /** Reads the user's remaining tokenCredits. Deliberately read-only: the
+   *  charge itself happens in `spendTokens` once the generation has finished
+   *  and its real token counts are known. A gate that also decremented would
+   *  bill every turn twice. */
+  getBalanceCredits: (userId: Types.ObjectId) => Promise<number | null>;
+  /** Only used for `lifetime_message_limit` (the anonymous trial). Credit-metered
+   *  plans never touch it. */
   incrementQuota: (args: {
     userId: Types.ObjectId;
     periodStart: Date;
@@ -16,24 +22,8 @@ export interface GatingDeps {
   }) => Promise<IQuotaLean | null>;
 }
 
-/** Fixed epoch used as the quota `period_start` for lifetime (never-reset) plans. */
+/** Fixed `period_start` for the never-resetting anonymous trial counter. */
 const LIFETIME_EPOCH = new Date(0);
-
-/** Midnight UTC for the given date — the quota `period_start` for daily-reset plans. */
-function startOfUTCDay(d: Date): Date {
-  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
-}
-
-/**
- * Resolves the quota `period_start` for a plan from its `quota_period`.
- * `lifetime` plans always resolve to the same fixed epoch, so their quota
- * document is created once and never rolls over. `daily` plans resolve to
- * the current UTC day, so `incrementQuota`'s upsert naturally opens a fresh
- * quota document each day — no cron/rollover job required.
- */
-function resolvePeriodStart(plan: PlanConfig): Date {
-  return plan.quota_period === 'lifetime' ? LIFETIME_EPOCH : startOfUTCDay(new Date());
-}
 
 /**
  * Checks whether a user is allowed to use a model (and optional feature).
@@ -80,18 +70,38 @@ export async function checkBillingAccess(
     throw new Error(JSON.stringify({ code: 'feature_not_available', feature: args.featureFlag }));
   }
 
-  if (plan.message_limit > 0) {
+  /** A message-count cap is a product rule, not a billing allowance: the
+   *  anonymous visitor trial must hold even with billing gating disabled, and
+   *  an anonymous visitor has no Balance row to draw against. Counted here,
+   *  atomically, exactly as before. */
+  if (plan.lifetime_message_limit > 0) {
     const q = await deps.incrementQuota({
       userId,
-      periodStart: resolvePeriodStart(plan),
-      limit: plan.message_limit,
+      periodStart: LIFETIME_EPOCH,
+      limit: plan.lifetime_message_limit,
     });
     if (q === null) {
       throw new Error(
         JSON.stringify({
           code: 'upgrade_required_quota',
-          used: plan.message_limit,
-          limit: plan.message_limit,
+          used: plan.lifetime_message_limit,
+          limit: plan.lifetime_message_limit,
+        }),
+      );
+    }
+  }
+
+  /** Plans that grant credits are metered by balance. A missing Balance row
+   *  reads as zero rather than as unlimited — a user whose grant never landed
+   *  must be told to upgrade, not handed free capacity. */
+  if (plan.monthly_token_credits > 0) {
+    const credits = (await deps.getBalanceCredits(userId)) ?? 0;
+    if (credits <= 0) {
+      throw new Error(
+        JSON.stringify({
+          code: 'upgrade_required_quota',
+          used: plan.monthly_token_credits,
+          limit: plan.monthly_token_credits,
         }),
       );
     }

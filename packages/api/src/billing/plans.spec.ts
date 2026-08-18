@@ -9,22 +9,25 @@ describe('PLANS', () => {
       expect(PLANS[code].code).toBe(code);
     }
   });
-  test('anonymous grants a lifetime 3-message trial with image generation disabled', () => {
-    expect(PLANS.anonymous.quota_period).toBe('lifetime');
-    expect(PLANS.anonymous.message_limit).toBe(3);
+  test('anonymous grants no credits — its trial is enforced separately', () => {
+    /** The 3-message anonymous trial is not a billing quota: it is gated by the
+     *  anonymous-trial mechanism, which must stay in force even when billing
+     *  gating is disabled. Granting credits here would double-gate it. */
+    expect(PLANS.anonymous.monthly_token_credits).toBe(0);
     expect(PLANS.anonymous.features.image_gen).toBe(false);
     expect(PLANS.anonymous.features.agents).toBe(false);
   });
-  test('free only allows cheap tier with a lifetime 3-message limit', () => {
+  test('free only allows cheap tier and a small credit grant', () => {
     expect(PLANS.free.allowed_cost_tiers).toEqual(['cheap']);
-    expect(PLANS.free.quota_period).toBe('lifetime');
-    expect(PLANS.free.message_limit).toBe(3);
+    expect(PLANS.free.monthly_token_credits).toBeGreaterThan(0);
     expect(PLANS.free.features.image_gen).toBe(false);
   });
-  test('pro plans allow all tiers + all features with a daily quota period', () => {
+  test('pro plans allow all tiers + all features and grant far more credits than free', () => {
     for (const code of ['pro_m', 'pro_q', 'pro_h'] as const) {
       expect(PLANS[code].allowed_cost_tiers).toEqual(['cheap', 'mid', 'expensive']);
-      expect(PLANS[code].quota_period).toBe('daily');
+      expect(PLANS[code].monthly_token_credits).toBeGreaterThan(
+        PLANS.free.monthly_token_credits * 10,
+      );
       expect(Object.values(PLANS[code].features).every(Boolean)).toBe(true);
     }
   });

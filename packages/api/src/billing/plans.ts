@@ -7,8 +7,9 @@ export const PLANS: Record<PlanCode, PlanConfig> = {
     name: 'Anonymous',
     monthly_price_cents: 0,
     allowed_cost_tiers: ['cheap', 'mid', 'expensive'],
-    quota_period: 'lifetime',
-    message_limit: 3, // 匿名访客终身 3 条免费消息，发完即要求注册/登录
+    // 匿名访客不发积分：其试用是产品规则，用条数而非额度表达
+    monthly_token_credits: 0,
+    lifetime_message_limit: 3,
     features: { agents: false, image_gen: false, voice: true, web_search: false },
   },
   free: {
@@ -16,8 +17,8 @@ export const PLANS: Record<PlanCode, PlanConfig> = {
     name: 'Free',
     monthly_price_cents: 0,
     allowed_cost_tiers: ['cheap'],
-    quota_period: 'lifetime',
-    message_limit: 3, // 终身 3 条试用，不重置
+    monthly_token_credits: 200_000, // 占位：约 $0.2 成本的试用额度
+    lifetime_message_limit: 0,
     features: { agents: false, image_gen: false, voice: false, web_search: false },
   },
   trial: {
@@ -25,8 +26,8 @@ export const PLANS: Record<PlanCode, PlanConfig> = {
     name: 'Trial',
     monthly_price_cents: 100,
     allowed_cost_tiers: ['cheap', 'mid', 'expensive'],
-    quota_period: 'daily',
-    message_limit: 30, // 占位数字，待阶段4调研同行后校准
+    monthly_token_credits: 400_000, // 占位：$1 档按 60% 毛利
+    lifetime_message_limit: 0,
     features: { agents: true, image_gen: true, voice: true, web_search: true },
   },
   pro_m: {
@@ -34,8 +35,8 @@ export const PLANS: Record<PlanCode, PlanConfig> = {
     name: 'Pro Monthly',
     monthly_price_cents: 2999,
     allowed_cost_tiers: ['cheap', 'mid', 'expensive'],
-    quota_period: 'daily',
-    message_limit: 100, // 占位数字，待阶段4调研同行后校准
+    monthly_token_credits: 11_996_000, // 占位：按 60% 毛利，待 Opus 用量核实后校准
+    lifetime_message_limit: 0,
     features: { agents: true, image_gen: true, voice: true, web_search: true },
   },
   pro_q: {
@@ -43,8 +44,8 @@ export const PLANS: Record<PlanCode, PlanConfig> = {
     name: 'Pro Quarterly',
     monthly_price_cents: 7999,
     allowed_cost_tiers: ['cheap', 'mid', 'expensive'],
-    quota_period: 'daily',
-    message_limit: 100, // 占位数字，待阶段4调研同行后校准
+    monthly_token_credits: 10_665_333, // 占位：按 60% 毛利，待 Opus 用量核实后校准
+    lifetime_message_limit: 0,
     features: { agents: true, image_gen: true, voice: true, web_search: true },
   },
   pro_h: {
@@ -52,8 +53,8 @@ export const PLANS: Record<PlanCode, PlanConfig> = {
     name: 'Pro Half-Year',
     monthly_price_cents: 14999,
     allowed_cost_tiers: ['cheap', 'mid', 'expensive'],
-    quota_period: 'daily',
-    message_limit: 100, // 占位数字，待阶段4调研同行后校准
+    monthly_token_credits: 9_999_333, // 占位：按 60% 毛利，待 Opus 用量核实后校准
+    lifetime_message_limit: 0,
     features: { agents: true, image_gen: true, voice: true, web_search: true },
   },
 };
