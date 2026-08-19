@@ -11,29 +11,53 @@
 
 ## 一、问题
 
-12 个生产模型中有 7 个的计费费率是错的。费率同时驱动 `Balance.tokenCredits` 扣减，因此这不是统计口径问题，而是**用户被按错误价格扣积分**。
+`librechat.yaml` 的 `modelSpecs` 共 28 个对用户开放的模型，其中 **16 个计费费率错误**。费率同时驱动 `Balance.tokenCredits` 扣减，因此这不是统计口径问题，而是**用户被按错误价格扣积分、我们按错误价格记录成本**。
 
-以 2026-08-19 实测为准（生产版 `findMatchingPattern` 算法 + 当日 OpenRouter 公开价目）：
+以 2026-08-19 实测为准：生产版 `findMatchingPattern` 算法解析当前费率，OpenRouter 公开价目接口取真实费率。单位统一为**美元 / 百万 token**。
 
-| 模型 | 当前计费费率 | 真实费率 | 偏差 |
+### 1.1 少扣 —— 我们在贴钱
+
+这是最严重的一类。真实成本高于记录成本，差额不出现在任何账目里。
+
+| 模型 | 当前扣费 | 真实成本 | 每百万 completion token 净亏 |
 |---|---|---|---|
-| `minimax/minimax-m3` | 6 / 6（兜底） | 0.30 / 1.20 | 多扣 20× / 5× |
-| `z-ai/glm-5.2` | 6 / 6（兜底） | 0.97 / 3.04 | 多扣 6.2× / 2× |
-| `x-ai/grok-4.3` | 3 / 15 | 1.25 / 2.50 | 多扣 2.4× / 6× |
-| `moonshotai/kimi-k2.6` | 2 / 5 | 0.95 / 4.00 | 多扣 2.1× / 1.25× |
-| `deepseek/deepseek-chat` | 0.28 / 0.42 | 0.26 / 1.03 | **少扣 2.45×（completion）** |
-| `gpt-5.4-mini` | 2.5 / 15 | 待核（见 §五） | 多扣，量级待定 |
-| `gpt-5.4-nano` | 2.5 / 15 | 待核（见 §五） | 多扣，量级待定 |
+| **`gpt-5.4-pro`** | 5 / 30 | **30 / 180** | **$150.00** |
+| `gpt-5.5` | 1.25 / 10 | 5 / 30 | $20.00 |
+| `deepseek-v4-pro` | 0.28 / 0.42 | 1.32 / 3.96 | $3.54 |
+| `kimi-k2.6` | 0.6 / 2.5 | 0.95 / 4 | $1.50 |
+| `deepseek/deepseek-chat` | 0.28 / 0.42 | 0.2574 / 1.0287 | $0.61 |
 
-单位统一为**美元 / 百万 token**，与上游 `tokenValues` 一致。
+`gpt-5.4-pro` 的真实单价是我们记录值的 6 倍。它是 modelSpecs 中对用户开放的模型之一。
 
-偏差方向不单一：多数模型多扣，`deepseek/deepseek-chat` 的 completion 少扣 —— 该模型每次调用我们都在贴钱。
+这直接坐实了 Board 评审"卖出一份没有对冲的看跌期权"的判断，且比预想严重 —— 问题不在于"某个重度用户可能超支"，而在于**最贵的模型被系统性地按 1/6 成本记账**。相对结构也是错的：`gpt-5.4-pro` 与 `gpt-5.4` 真实价差 12 倍，当前表中仅 2 倍。
 
-### 1.1 业务后果
+### 1.2 多扣 —— 用户吃亏
 
-- **多扣**：用户月度积分被过快消耗，提前撞到"额度用尽"，beta 期直接表现为留存损失
-- **少扣**：真实成本高于我们记录的成本，且不会出现在任何告警里
-- **成本看板不可信**：看板若基于同一份费率，会同时高估和低估，方向随模型分布而变
+| 模型 | 当前扣费 | 真实成本 | 偏差 |
+|---|---|---|---|
+| `MiniMax-M3` | 6 / 6（兜底） | 0.3 / 1.2 | 20× / 5× |
+| `gpt-5.4-nano` | 2.5 / 15 | 0.2 / 1.25 | 12.5× / 12× |
+| `glm-5.2` | 6 / 6（兜底） | 0.966 / 3.036 | 6.21× / 1.98× |
+| `glm-5-turbo` | 6 / 6（兜底） | 1.2 / 4 | 5× / 1.5× |
+| `gemini-3-flash-preview` | 2 / 12 | 0.5 / 3 | 4× / 4× |
+| `deepseek-v4-flash` | 0.28 / 0.42 | 0.0826 / 0.1652 | 3.39× / 2.54× |
+| `gpt-5.4-mini` | 2.5 / 15 | 0.75 / 4.5 | 3.33× / 3.33× |
+| `x-ai/grok-4.3` | 3 / 15 | 1.25 / 2.5 | 2.4× / 6× |
+| `grok-4.20-beta-0309-reasoning` | 3 / 15 | 1.25 / 2.5 | 2.4× / 6× |
+| `grok-4.20-beta-0309-non-reasoning` | 3 / 15 | 1.25 / 2.5 | 2.4× / 6× |
+| `grok-4.20-multi-agent-beta-0309` | 3 / 15 | 1.25 / 2.5 | 2.4× / 6× |
+
+### 1.3 正确的 11 个
+
+全部 Claude 系列（opus 4-5/4-6/4-7/4-8、sonnet 4-6 及 thinking 变体、haiku 4-5）、`gemini-2.5-flash`、`gemini-2.5-flash-lite`、`gemini-3.1-pro-preview`、`gpt-5.4` 与上游表精确一致，无需改动。
+
+`grok-4-1-fast-non-reasoning` 单列：OpenRouter 目录中无对应条目，保留上游 `grok-4-1-fast` 的 0.2 / 0.5，来源标注为上游表。
+
+### 1.4 业务后果
+
+- **少扣**：真实成本高于记录成本，成本看板会低估，告警不会触发
+- **多扣**：用户月度积分被过快消耗，提前撞到"额度用尽"，beta 期表现为留存损失
+- **两者叠加**：看板的总数既非高估也非低估，而是**方向随用户的模型选择而变**，无法通过统一系数校正
 
 ---
 
@@ -129,30 +153,38 @@ if (lowerKey.length > bestLength && lowerModelName.includes(lowerKey)) {
 
 ## 四、价格来源与时效
 
-### 4.1 OpenRouter 侧（5 个模型）
+### 4.1 统一来源：OpenRouter 公开价目
 
-来源：`https://openrouter.ai/api/v1/models` 公开接口，无需鉴权。字段 `pricing.prompt` / `pricing.completion`，单位为**美元 / token**，乘 `1e6` 转为本表单位。
+`https://openrouter.ai/api/v1/models`，无需鉴权。字段 `pricing.prompt` / `pricing.completion`，单位为**美元 / token**，乘 `1e6` 转为本表单位。
 
-2026-08-19 实测值：
+该接口收录全部 27 个可映射模型（含经 gptsapi 路由的 OpenAI / Anthropic / Google 系列），因此**两侧使用同一来源**，无需分别处理。对 gptsapi 路由的模型，此值为原厂标价，作为成本上界使用 —— 中转商定价不高于原厂标价，故方向保守。
 
-| 模型 | prompt | completion | cache_read | cache_write |
-|---|---|---|---|---|
-| `deepseek/deepseek-chat` | 0.2574 | 1.0287 | 未提供 | 未提供 |
-| `x-ai/grok-4.3` | 1.2500 | 2.5000 | 0.2000 | 未提供 |
-| `moonshotai/kimi-k2.6` | 0.9500 | 4.0000 | 0.1600 | 未提供 |
-| `z-ai/glm-5.2` | 0.9660 | 3.0360 | 0.1932 | 未提供 |
-| `minimax/minimax-m3` | 0.3000 | 1.2000 | 0.0600 | 未提供 |
+### 4.2 修正值全表（2026-08-19 取数）
 
-`cache_write` 一列全部缺失（OpenRouter 全站 415 个模型中仅 72 个提供该字段），因此缓存费率无法从此来源完整获取。见 §7.2。
+```ts
+export const chatchatValues = {
+  'gemini-3-flash-preview':           { prompt: 0.5,    completion: 3      },
+  'gpt-5.5':                          { prompt: 5,      completion: 30     },
+  'gpt-5.4-pro':                      { prompt: 30,     completion: 180    },
+  'gpt-5.4-mini':                     { prompt: 0.75,   completion: 4.5    },
+  'gpt-5.4-nano':                     { prompt: 0.2,    completion: 1.25   },
+  'x-ai/grok-4.3':                    { prompt: 1.25,   completion: 2.5    },
+  'grok-4.20-beta-0309-reasoning':     { prompt: 1.25,   completion: 2.5    },
+  'grok-4.20-beta-0309-non-reasoning': { prompt: 1.25,   completion: 2.5    },
+  'grok-4.20-multi-agent-beta-0309':   { prompt: 1.25,   completion: 2.5    },
+  'deepseek-v4-pro':                  { prompt: 1.32,   completion: 3.96   },
+  'deepseek-v4-flash':                { prompt: 0.0826, completion: 0.1652 },
+  'glm-5.2':                          { prompt: 0.966,  completion: 3.036  },
+  'glm-5-turbo':                      { prompt: 1.2,    completion: 4      },
+  'kimi-k2.6':                        { prompt: 0.95,   completion: 4      },
+  'MiniMax-M3':                       { prompt: 0.3,    completion: 1.2    },
+  'deepseek/deepseek-chat':           { prompt: 0.2574, completion: 1.0287 },
+};
+```
 
-### 4.2 gptsapi 侧
+三个 `grok-4.20-*` 变体映射至 OpenRouter 的 `x-ai/grok-4.20`（multi-agent 变体映射至 `x-ai/grok-4.20-multi-agent`，其定价与基础版相同）。
 
-gptsapi 不公开价目 API。取值规则，按可信度降序：
-
-1. **gptsapi 账单控制台实测单价** —— 最准，但需人工核对（见 §五）
-2. **原厂公开标价** —— 作为上界代用值。gptsapi 作为中转商定价不高于原厂标价，故此值会略微**高估**我们的成本，方向保守（宁可以为更贵）
-
-每个条目在源码中以注释标注来源与取数日期。
+`cache_write` 字段全站 415 个模型中仅 72 个提供，我们的模型均未提供，因此缓存费率不在本次范围（见 §7.2）。
 
 ### 4.3 时效维护
 
@@ -164,9 +196,9 @@ gptsapi 不公开价目 API。取值规则，按可信度降序：
 
 ## 五、依赖用户核实的事项
 
-`gpt-5.4-mini` / `gpt-5.4-nano` 的真实单价需从 gptsapi 账单控制台确认。在此之前按 §4.2 规则 2 取原厂标价上界。
+全部 27 个可映射模型的单价均已从 OpenRouter 取得，**本 spec 的实施不依赖任何待核数据**。
 
-同时待核：gptsapi 是否按其少报的 token 数出账（见 [2026-08-17-gptsapi-usage-underreporting.md](../research/2026-08-17-gptsapi-usage-underreporting.md)）。该问题与本 spec 正交 —— 本 spec 修正**单价**，该问题影响**token 计数**，两者独立且都会影响最终成本。
+唯一仍待核实的是：gptsapi 是否按其少报的 token 数出账（见 [2026-08-17-gptsapi-usage-underreporting.md](../research/2026-08-17-gptsapi-usage-underreporting.md)）。该问题与本 spec 正交 —— 本 spec 修正**单价**，该问题影响**token 计数**，两者独立且都会影响最终成本。
 
 ---
 
@@ -176,11 +208,13 @@ gptsapi 不公开价目 API。取值规则，按可信度降序：
 
 **必测项**：
 
-1. **精确匹配优先** —— 对 7 个受影响模型逐一断言 `getValueKey()` 返回我们的精确条目，而非上游前缀条目
-2. **不回归** —— 断言未被我们覆盖的上游模型解析结果不变（防止新条目意外成为某个上游模型的更长匹配）
-3. **无兜底** —— 断言全部 12 个生产模型均不落 `defaultRate`
-4. **单位一致** —— 断言 `chatchatValues` 全部条目为正数且在合理量级（0.001 ~ 200），拦截"忘记乘 1e6"这类错误
-第 2 项尤其重要：新增一个较长的键可能改变某个上游模型的匹配结果。测试需覆盖 `modelSpecs` 中全部 37 个条目。
+1. **精确匹配优先** —— 对 16 个受影响模型逐一断言 `getValueKey()` 返回我们的精确条目，而非上游前缀条目
+2. **不回归** —— 断言 §1.3 中 11 个当前正确的模型解析结果不变（防止新条目意外成为它们的更长匹配）
+3. **无兜底** —— 断言 `modelSpecs` 全部 28 个模型均不落 `defaultRate`
+4. **单位一致** —— 断言 `chatchatValues` 全部条目为正数且在合理量级（0.01 ~ 200），拦截"忘记乘 1e6"这类错误
+5. **完整性** —— 断言 `chatchatValues` 的键集合是 `modelSpecs` 中 model 值的子集，防止表中残留已下线模型
+
+第 2 项尤其重要：新增一个较长的键可能改变某个上游模型的匹配结果。测试需以 `librechat.yaml` 的 `modelSpecs` 为数据源，而非硬编码模型列表 —— 新增模型时测试应自动覆盖。
 
 ---
 
@@ -205,6 +239,8 @@ gptsapi 不公开价目 API。取值规则，按可信度降序：
 
 ## 八、上线风险
 
-**用户可感知的行为变化**：修正后用户积分消耗速度改变 —— 多数模型变慢（多扣被修正），DeepSeek 变快（少扣被修正）。beta 期用户量小且尚未收费，影响可控，但需在发布说明中记录变更日期。
+**用户可感知的行为变化**：积分消耗速度按模型分化 —— 11 个多扣的模型变慢（最多 20 倍），5 个少扣的模型变快（`gpt-5.4-pro` 快 6 倍）。beta 期用户量小且尚未收费，影响可控，但需在发布说明中记录变更日期。
+
+**`gpt-5.4-pro` 的额度影响需单独评估**：修正后该模型消耗积分的速度是修正前的 6 倍，按 §一的真实单价，Pro 月度额度用于该模型时可支撑的对话轮次将显著下降。这是把真实成本暴露出来的必然结果，但可能需要重新审视是否应向非最高档 plan 开放该模型 —— 该决策不在本 spec 范围内，但应在实施后立即基于修正后的数据重新评估。
 
 **回滚**：还原 `tx.ts` 那一行即可完全回退，无数据迁移、无 schema 变更。
