@@ -916,11 +916,11 @@ describe('Deepseek Model Tests', () => {
   });
 
   it('should handle DeepSeek model name variations with provider prefixes', () => {
-    const modelVariations = [
-      'deepseek/deepseek-chat',
-      'openrouter/deepseek-chat',
-      'deepseek/deepseek-reasoner',
-    ];
+    /** `deepseek/deepseek-chat` is excluded here: ChatChat overrides it with the
+     *  live OpenRouter rate (see chatchat.ts), so it no longer shares the bare
+     *  `deepseek-chat` pricing. The remaining variations still fall through to
+     *  the upstream entry, which is what this test guards. */
+    const modelVariations = ['openrouter/deepseek-chat', 'deepseek/deepseek-reasoner'];
 
     modelVariations.forEach((model) => {
       const promptMultiplier = getMultiplier({ model, tokenType: 'prompt' });
@@ -955,7 +955,10 @@ describe('Deepseek Model Tests', () => {
   });
 
   it('should handle DeepSeek cache multipliers with model variations', () => {
-    const modelVariations = ['deepseek/deepseek-chat', 'openrouter/deepseek-reasoner'];
+    /** `deepseek/deepseek-chat` is excluded for the same reason as above: it is
+     *  overridden in chatchat.ts and has no cache entry there, so its cache
+     *  lookups resolve to null and bill at its own input rate. */
+    const modelVariations = ['openrouter/deepseek-reasoner'];
 
     modelVariations.forEach((model) => {
       const writeMultiplier = getCacheMultiplier({ model, cacheType: 'write' });

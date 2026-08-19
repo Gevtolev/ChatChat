@@ -16,6 +16,8 @@
  *    the last-defined key wins.
  */
 
+import { chatchatValues, chatchatCacheValues } from './chatchat';
+
 export interface TxDeps {
   /** From @librechat/api — matches a model name to a canonical key. */
   matchModelName: (model: string, endpoint?: string) => string | undefined;
@@ -276,6 +278,7 @@ export const tokenValues: Record<string, { prompt: number; completion: number }>
     'qwen3-next-80b-a3b': { prompt: 0.1, completion: 0.8 },
   },
   bedrockValues,
+  chatchatValues,
 );
 
 /**
@@ -341,6 +344,11 @@ export const cacheTokenValues: Record<string, { write: number; read: number }> =
   // Gemini 3.5 Flash - cache write: $1.50/1M, cache read: $0.15/1M
   'gemini-3.5-flash': { write: 1.5, read: 0.15 },
 };
+
+/** Merged after definition rather than wrapping the literal in `Object.assign`:
+ *  wrapping reindents all sixty entries, turning a five-line change into a
+ *  124-line diff that conflicts on every upstream sync. */
+Object.assign(cacheTokenValues, chatchatCacheValues);
 
 /**
  * Premium (tiered) pricing for models whose rates change based on prompt size.

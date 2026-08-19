@@ -81,6 +81,8 @@ import { createAuditLogMethods, type AuditLogMethods } from './auditLog';
 
 export { RoleConflictError, DEFAULT_REFRESH_TOKEN_EXPIRY, DEFAULT_SESSION_EXPIRY };
 export { tokenValues, cacheTokenValues, premiumTokenValues, defaultRate };
+export { chatchatValues, chatchatCacheValues, chatchatNoCacheModels } from './chatchat';
+export type { TokenRate, CacheRate } from './chatchat';
 export { permissionBitSupersets };
 
 export type AllMethods = UserMethods &

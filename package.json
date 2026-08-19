@@ -12,6 +12,7 @@
     "update": "node config/update.js",
     "add-balance": "node config/add-balance.js",
     "backfill-plan-credits": "node config/backfill-plan-credits.js",
+    "check-model-prices": "node config/check-model-prices.js",
     "set-balance": "node config/set-balance.js",
     "list-balances": "node config/list-balances.js",
     "set-plan": "node config/set-plan.js",

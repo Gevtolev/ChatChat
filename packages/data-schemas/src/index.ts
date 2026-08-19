@@ -14,6 +14,9 @@ export {
   cacheTokenValues,
   premiumTokenValues,
   defaultRate,
+  chatchatValues,
+  chatchatCacheValues,
+  chatchatNoCacheModels,
   permissionBitSupersets,
 } from './methods';
 export type * from './types';

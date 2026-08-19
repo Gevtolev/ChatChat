@@ -143,7 +143,13 @@ export const tokenValues: Record<string, { prompt: number; completion: number }>
 
 全部数据置于新文件 `packages/data-schemas/src/methods/chatchat.ts`。这是能达成的最小分歧：上游文件一行 diff，后续价格变更完全不触碰上游文件。
 
-`cacheTokenValues`（`tx.ts:285`）目前是纯对象字面量，需先包成 `Object.assign({ ... }, chatchatCacheValues)` —— 两行 diff（开头与结尾），数据同样置于我们自己的文件。
+`cacheTokenValues`（`tx.ts:285`）是纯对象字面量，**不要包进 `Object.assign`** —— 那样 prettier 会重排全部 60 个条目的缩进，把 5 行语义改动变成 124 行文本 diff，每次上游同步都要人工处理。改为定义之后合并：
+
+```ts
+Object.assign(cacheTokenValues, chatchatCacheValues);
+```
+
+语义等价（我们的键覆盖同名上游键），但 `tx.ts` 的最终 diff 是 **8 行纯新增、零删除**，是这个方案能达到的最小上游足迹。
 
 ### 3.2 正确性依据
 
@@ -224,38 +230,32 @@ export const chatchatValues = {
 
 ### 4.4 修正值全表（缓存部分，2026-08-19 取数）
 
+Anthropic 六个模型的缓存费率上游**已经正确**（实测与 OpenRouter 完全一致），不纳入覆盖表 —— 覆盖它们只会凭空制造分歧。
+
+**缓存覆盖与费率覆盖是两件独立的事。** `gemini-2.5-flash` 与 `gemini-2.5-flash-lite` 的基础费率上游本就正确，但二者**没有缓存条目**，缓存读取因此按 input 满价计（0.3 / 0.1），而真实值为 0.03 / 0.01 —— 多收 10 倍。它们必须进缓存表，尽管不在费率表里。
+
 ```ts
 export const chatchatCacheValues = {
-  // Anthropic —— 显式缓存，write 为 OpenRouter 公布的 1.25× input
-  'claude-opus-4-8':                   { write: 6.25,   read: 0.5    },
-  'claude-opus-4-7':                   { write: 6.25,   read: 0.5    },
-  'claude-opus-4-6':                   { write: 6.25,   read: 0.5    },
-  'claude-opus-4-5-20251101':          { write: 6.25,   read: 0.5    },
-  'claude-sonnet-4-6':                 { write: 3.75,   read: 0.3    },
-  'claude-sonnet-4-6-thinking':        { write: 3.75,   read: 0.3    },
-  'claude-haiku-4-5-20251001':         { write: 1.25,   read: 0.1    },
+  /** Base rates for these two are already correct upstream, but neither has a
+   *  cache entry, so cached reads were billing at the full input rate — 10x
+   *  their real cost. Cache coverage is independent of base-rate coverage. */
+  'gemini-2.5-flash': { write: 0.3, read: 0.03 },
+  'gemini-2.5-flash-lite': { write: 0.1, read: 0.01 },
 
-  // 隐式缓存 —— write 取 input 价
-  'gemini-2.5-flash':                  { write: 0.3,    read: 0.03   },
-  'gemini-3.1-pro-preview':            { write: 2,      read: 0.2    },
-  'gemini-3-flash-preview':            { write: 0.5,    read: 0.05   },
-  'gemini-2.5-flash-lite':             { write: 0.1,    read: 0.01   },
-  'gpt-5.5':                           { write: 5,      read: 0.5    },
-  'gpt-5.4':                           { write: 2.5,    read: 0.25   },
-  'gpt-5.4-mini':                      { write: 0.75,   read: 0.075  },
-  'gpt-5.4-nano':                      { write: 0.2,    read: 0.02   },
-  'x-ai/grok-4.3':                     { write: 1.25,   read: 0.2    },
-  'grok-4.20-beta-0309-reasoning':     { write: 1.25,   read: 0.2    },
-  'grok-4.20-beta-0309-non-reasoning': { write: 1.25,   read: 0.2    },
-  'grok-4.20-multi-agent-beta-0309':   { write: 1.25,   read: 0.2    },
-  'deepseek-v4-pro':                   { write: 1.32,   read: 0.044  },
-  'deepseek-v4-flash':                 { write: 0.0826, read: 0.0165 },
-  'glm-5.2':                           { write: 0.966,  read: 0.1932 },
-  'glm-5-turbo':                       { write: 1.2,    read: 0.24   },
-  'kimi-k2.6':                         { write: 0.95,   read: 0.16   },
-  'MiniMax-M3':                        { write: 0.3,    read: 0.06   },
-
-  // gpt-5.4-pro / deepseek-chat 不支持缓存，刻意不设条目
+  'gemini-3-flash-preview': { write: 0.5, read: 0.05 },
+  'gpt-5.5': { write: 5, read: 0.5 },
+  'gpt-5.4-mini': { write: 0.75, read: 0.075 },
+  'gpt-5.4-nano': { write: 0.2, read: 0.02 },
+  'x-ai/grok-4.3': { write: 1.25, read: 0.2 },
+  'grok-4.20-beta-0309-reasoning': { write: 1.25, read: 0.2 },
+  'grok-4.20-beta-0309-non-reasoning': { write: 1.25, read: 0.2 },
+  'grok-4.20-multi-agent-beta-0309': { write: 1.25, read: 0.2 },
+  'deepseek-v4-pro': { write: 1.32, read: 0.044 },
+  'deepseek-v4-flash': { write: 0.0826, read: 0.0165 },
+  'glm-5.2': { write: 0.966, read: 0.1932 },
+  'glm-5-turbo': { write: 1.2, read: 0.24 },
+  'kimi-k2.6': { write: 0.95, read: 0.16 },
+  'MiniMax-M3': { write: 0.3, read: 0.06 },
 };
 ```
 
@@ -279,17 +279,33 @@ export const chatchatCacheValues = {
 
 置于 `packages/data-schemas/src/methods/chatchat.spec.ts`。
 
-**必测项**：
+### 6.0 先决条件：修正测试辅助函数
+
+`packages/data-schemas/src/methods/test-helpers.ts` 中内联的 `findMatchingPattern` 与生产版**算法不同** —— 它是"反序取首个匹配"，胜出者取决于键的插入顺序；生产版是"最长匹配 + 精确短路"，胜出者取决于键长度。
+
+data-schemas 不能反向依赖 `packages/api`，内联是必要的，但这份副本已经漂移。用它写的测试会以生产永远不会重现的理由通过或失败 —— §3.2 的正确性论证恰恰建立在长度优先之上，用错误算法验证等于没验证。
+
+**必须先将其修正为与生产逐字等价**，再写本 spec 的任何测试。修正后既有 211 个 tx 测试全部通过，无回归。
+
+### 6.1 必测项
 
 1. **精确匹配优先** —— 对 16 个受影响模型逐一断言 `getValueKey()` 返回我们的精确条目，而非上游前缀条目
 2. **不回归** —— 断言 §1.3 中 11 个当前正确的模型解析结果不变（防止新条目意外成为它们的更长匹配）
-3. **无兜底** —— 断言 `modelSpecs` 全部 28 个模型均不落 `defaultRate`
+3. **无兜底** —— 断言覆盖表中每个模型的 prompt 与 completion 费率不同时等于 `defaultRate`
 4. **单位一致** —— 断言 `chatchatValues` 全部条目为正数且在合理量级（0.01 ~ 200），拦截"忘记乘 1e6"这类错误
-5. **完整性** —— 断言 `chatchatValues` 与 `chatchatCacheValues` 的键集合均为 `modelSpecs` 中 model 值的子集，防止表中残留已下线模型
-6. **缓存费率生效** —— 对 25 个支持缓存的模型断言 `getCacheMultiplier()` 返回我们的条目；断言 `read < input` 对每个条目成立（缓存读取永远比 input 便宜，该不变量能拦截字段写反）
-7. **不支持缓存的模型无条目** —— 断言 `gpt-5.4-pro` / `deepseek/deepseek-chat` 的 `getCacheMultiplier()` 返回 `null`，其缓存 token 按 input 满价计费
+5. **缓存覆盖完整** —— 断言 `chatchatValues` 中每个模型（除显式声明不支持缓存者）都有缓存条目。**该断言必须是单向包含而非集合相等**：缓存表可以合法地包含费率表中没有的模型，因为一个模型可以基础费率正确却缺缓存条目 —— `gemini-2.5-flash` 与 `-lite` 正是此例。写成相等会把两件独立的事绑死，恰好掩盖这一类缺陷
+6. **缓存费率生效** —— 断言 `getCacheMultiplier()` 对每个条目返回我们的值；断言 `read ≤ input` 与 `write ≥ read`（拦截字段写反）
+7. **不支持缓存的模型返回 null** —— 断言 `gpt-5.4-pro` / `deepseek/deepseek-chat` 的 `getCacheMultiplier()` 返回 `null`。这不是缺口：`calculateStructuredTokenValue` 以 `?? inputMultiplier` 承接 `null`，缓存 token 因此按该模型自身的 input 费率计 —— 对不支持缓存的模型这正是正确金额，且 input 费率变动时自动跟随。显式写一个等于 input 价的条目反而会重复数据并腐化
 
-第 2 项尤其重要：新增一个较长的键可能改变某个上游模型的匹配结果。测试需以 `librechat.yaml` 的 `modelSpecs` 为数据源，而非硬编码模型列表 —— 新增模型时测试应自动覆盖。
+第 2 项尤其重要：新增一个较长的键可能改变某个上游模型的匹配结果。
+
+**测试不读 `librechat.yaml`。** data-schemas 未声明 `js-yaml` 依赖，为一个测试引入它不划算。断言全部从两张表自身推导，因此新增模型无需改测试；而"`modelSpecs` 中存在但两表未覆盖"这类跨文件一致性检查交给 §4.5 的脚本 —— 它运行在根 workspace，yaml 与网络都可用。
+
+### 6.2 上游测试的必要改动
+
+`tx.spec.ts` 中两处 DeepSeek 断言会失败，因为它们固定了 `deepseek/deepseek-chat` 与裸 `deepseek-chat` 同价，而我们刻意改变了该模型的费率。将 `deepseek/deepseek-chat` 从这两处的变体列表中移除并注明原因即可 —— 其余变体仍走上游条目，测试的原意得以保留。
+
+这是本 spec 唯一触及上游测试的地方。固定错误定价的断言，在定价被修正时本就应当变更。
 
 ---
 
@@ -298,7 +314,11 @@ export const chatchatCacheValues = {
 ### 7.1 在范围内
 
 - `packages/data-schemas/src/methods/chatchat.ts`（新增）
-- `packages/data-schemas/src/methods/tx.ts`（三行：`tokenValues` 的 `Object.assign` 追加 `chatchatValues`；`cacheTokenValues` 由对象字面量包成 `Object.assign({ ... }, chatchatCacheValues)`）
+- `packages/data-schemas/src/methods/tx.ts`（`tokenValues` 的 `Object.assign` 追加 `chatchatValues`；`cacheTokenValues` 由对象字面量包成 `Object.assign({ ... }, chatchatCacheValues)`；一行 import）
+- `packages/data-schemas/src/methods/test-helpers.ts`（修正 `findMatchingPattern`，见 §6.0）
+- `packages/data-schemas/src/methods/index.ts` 与 `src/index.ts`（导出新表，供检查脚本使用）
+- `packages/data-schemas/src/methods/tx.spec.ts`（两处 DeepSeek 断言，见 §6.2）
+- `package.json`（`check-model-prices` 脚本入口）
 - `config/check-model-prices.js`（新增，只读比对脚本）
 - 上述测试
 

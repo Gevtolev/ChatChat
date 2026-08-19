@@ -4,10 +4,14 @@
  */
 
 /**
- * Finds the first matching pattern in a tokens/values map by reverse-iterating
- * and checking if the model name (lowercased) includes the key.
+ * Finds the longest key in a tokens/values map that the lowercased model name
+ * contains, short-circuiting on an exact-length match.
  *
- * Inlined from @librechat/api findMatchingPattern
+ * Inlined from @librechat/api findMatchingPattern — must stay byte-for-byte
+ * equivalent in behaviour. An earlier copy here returned the first match found
+ * while reverse-iterating, which makes the winner depend on key insertion order
+ * rather than key length. Tests written against that copy pass or fail for
+ * reasons production never reproduces.
  */
 export function findMatchingPattern(
   modelName: string,
@@ -15,13 +19,21 @@ export function findMatchingPattern(
 ): string | undefined {
   const keys = Object.keys(tokensMap);
   const lowerModelName = modelName.toLowerCase();
+  let bestMatch: string | undefined = undefined;
+  let bestLength = 0;
   for (let i = keys.length - 1; i >= 0; i--) {
-    const modelKey = keys[i];
-    if (lowerModelName.includes(modelKey)) {
-      return modelKey;
+    const key = keys[i];
+    const lowerKey = key.toLowerCase();
+    if (lowerKey.length > bestLength && lowerModelName.includes(lowerKey)) {
+      if (lowerKey.length === lowerModelName.length) {
+        return key;
+      }
+      bestMatch = key;
+      bestLength = lowerKey.length;
     }
   }
-  return undefined;
+
+  return bestMatch;
 }
 
 /**
