@@ -6,6 +6,7 @@
 > **父 spec**: [2026-05-21-graupel-stage-3-plan-gating.md](./2026-05-21-graupel-stage-3-plan-gating.md)
 > **预估**: 6-10 小时
 > **优先级**: 最高 —— 这是一个正在影响真实用户扣费的缺陷，独立于任何新功能
+> **后续 spec**: [计费闸门通电](./2026-08-19-chatchat-billing-enforcement-design.md) —— 本 spec 校准刻度，该 spec 装上保险丝。二者必须一起完成才构成成本上界
 
 ---
 
