@@ -53,7 +53,26 @@
 
 `grok-4-1-fast-non-reasoning` 单列：OpenRouter 目录中无对应条目，保留上游 `grok-4-1-fast` 的 0.2 / 0.5，来源标注为上游表。
 
-### 1.4 业务后果
+### 1.4 缓存命中费率
+
+独立于上述基础费率，缓存命中的计费同样有缺陷。`cacheTokenValues` 现有 53 条，覆盖我们 25 个支持缓存的模型时：**8 个无条目、6 个条目错误。**
+
+无条目时的行为已由真实交易数据证实。生产库中一条 grok 记录：
+
+```
+{ model: "x-ai/grok-4.3", rate: 3, rawAmount: -387,
+  inputTokens: -259, writeTokens: 0, readTokens: -128 }
+```
+
+`rate` 是三类 token 的加权平均，此处恰好等于 input 费率 3，说明 128 个缓存读取 token **按 input 满价计费**。缓存读取的真实价格通常是 input 的 1/5 ~ 1/10（grok 6.25×、Claude Opus 10×），因此这些 token 被多收了 5-10 倍。
+
+无条目的 8 个：`gemini-2.5-flash`、`gemini-3-flash-preview`、`gemini-2.5-flash-lite`、`x-ai/grok-4.3`、三个 `grok-4.20-*` 变体、`glm-5.2`、`glm-5-turbo`、`MiniMax-M3`。
+
+条目错误的 6 个中，`gpt-5.5` 的 read 取 0.125 而真实为 0.5（**少收 4 倍**），`gpt-5.4-pro` / `-mini` / `-nano` 均错配至 `gpt-5.4` 的 2.5/0.25。
+
+叠加效应示例，仍用上面那条真实记录：当前扣 `387 × 3 = 1161` credits；修正基础费率后为 `259×1.25 + 128×1.25 = 484`；再修正缓存费率后为 `259×1.25 + 128×0.2 = 349`。**缓存修正在基础修正之上再降 28%。**对话越长缓存占比越高，该比例还会上升。
+
+### 1.5 业务后果
 
 - **少扣**：真实成本高于记录成本，成本看板会低估，告警不会触发
 - **多扣**：用户月度积分被过快消耗，提前撞到"额度用尽"，beta 期表现为留存损失
@@ -123,7 +142,7 @@ export const tokenValues: Record<string, { prompt: number; completion: number }>
 
 全部数据置于新文件 `packages/data-schemas/src/methods/chatchat.ts`。这是能达成的最小分歧：上游文件一行 diff，后续价格变更完全不触碰上游文件。
 
-**缓存费率不在本次范围内**，理由见 §7.2。
+`cacheTokenValues`（`tx.ts:285`）目前是纯对象字面量，需先包成 `Object.assign({ ... }, chatchatCacheValues)` —— 两行 diff（开头与结尾），数据同样置于我们自己的文件。
 
 ### 3.2 正确性依据
 
@@ -184,11 +203,64 @@ export const chatchatValues = {
 
 三个 `grok-4.20-*` 变体映射至 OpenRouter 的 `x-ai/grok-4.20`（multi-agent 变体映射至 `x-ai/grok-4.20-multi-agent`，其定价与基础版相同）。
 
-`cache_write` 字段全站 415 个模型中仅 72 个提供，我们的模型均未提供，因此缓存费率不在本次范围（见 §7.2）。
+### 4.3 缓存费率（`chatchatCacheValues`）
 
-### 4.3 时效维护
+27 个模型中 25 个提供 `input_cache_read`。缺失的两个（`gpt-5.4-pro`、`deepseek/deepseek-chat`）不支持缓存，**不设条目** —— 无条目时缓存 token 按 input 满价计费，对不支持缓存的模型这正是正确行为。
 
-新增脚本 `config/check-model-prices.js`：拉取 OpenRouter 实时价目，与 `chatchatValues` 逐项比对，输出偏差报告，只读不写。
+**`write` 取值规则**：不能一律采用 OpenRouter 的 `input_cache_write`。实测各家比值：
+
+| 供应商 | write / prompt 比值 | 判定 |
+|---|---|---|
+| Anthropic（opus / sonnet / haiku） | 1.250 / 1.250 / 1.250 | 稳定倍率，**是真正的写入价** |
+| Google（4 个 Gemini） | 0.278 / 0.188 / 0.167 / 0.833 | 比值散乱，且三个模型共用绝对值 0.0833 —— 这是**按时长计的存储价**，非每 token 写入倍率 |
+
+因此：
+
+- **Anthropic** → 采用 OpenRouter 的 `input_cache_write`（6 个模型，均为 1.25× input）
+- **其余全部** → `write` 取该模型的 input 价。这些供应商使用隐式缓存，缓存创建的 token 本就按普通 input 计费；取 input 价而非 0，可保证万一 `writeTokens` 被上报也不会被免费计入
+
+完整取值见 §4.4。
+
+### 4.4 修正值全表（缓存部分，2026-08-19 取数）
+
+```ts
+export const chatchatCacheValues = {
+  // Anthropic —— 显式缓存，write 为 OpenRouter 公布的 1.25× input
+  'claude-opus-4-8':                   { write: 6.25,   read: 0.5    },
+  'claude-opus-4-7':                   { write: 6.25,   read: 0.5    },
+  'claude-opus-4-6':                   { write: 6.25,   read: 0.5    },
+  'claude-opus-4-5-20251101':          { write: 6.25,   read: 0.5    },
+  'claude-sonnet-4-6':                 { write: 3.75,   read: 0.3    },
+  'claude-sonnet-4-6-thinking':        { write: 3.75,   read: 0.3    },
+  'claude-haiku-4-5-20251001':         { write: 1.25,   read: 0.1    },
+
+  // 隐式缓存 —— write 取 input 价
+  'gemini-2.5-flash':                  { write: 0.3,    read: 0.03   },
+  'gemini-3.1-pro-preview':            { write: 2,      read: 0.2    },
+  'gemini-3-flash-preview':            { write: 0.5,    read: 0.05   },
+  'gemini-2.5-flash-lite':             { write: 0.1,    read: 0.01   },
+  'gpt-5.5':                           { write: 5,      read: 0.5    },
+  'gpt-5.4':                           { write: 2.5,    read: 0.25   },
+  'gpt-5.4-mini':                      { write: 0.75,   read: 0.075  },
+  'gpt-5.4-nano':                      { write: 0.2,    read: 0.02   },
+  'x-ai/grok-4.3':                     { write: 1.25,   read: 0.2    },
+  'grok-4.20-beta-0309-reasoning':     { write: 1.25,   read: 0.2    },
+  'grok-4.20-beta-0309-non-reasoning': { write: 1.25,   read: 0.2    },
+  'grok-4.20-multi-agent-beta-0309':   { write: 1.25,   read: 0.2    },
+  'deepseek-v4-pro':                   { write: 1.32,   read: 0.044  },
+  'deepseek-v4-flash':                 { write: 0.0826, read: 0.0165 },
+  'glm-5.2':                           { write: 0.966,  read: 0.1932 },
+  'glm-5-turbo':                       { write: 1.2,    read: 0.24   },
+  'kimi-k2.6':                         { write: 0.95,   read: 0.16   },
+  'MiniMax-M3':                        { write: 0.3,    read: 0.06   },
+
+  // gpt-5.4-pro / deepseek-chat 不支持缓存，刻意不设条目
+};
+```
+
+### 4.5 时效维护
+
+新增脚本 `config/check-model-prices.js`：拉取 OpenRouter 实时价目，与 `chatchatValues` 及 `chatchatCacheValues` 逐项比对，输出偏差报告，只读不写。同时报告 `modelSpecs` 中存在但两表均未覆盖的模型 —— 新增模型时最容易漏的就是这一步。
 
 这是路线选择的直接代价 —— 手工表会过期。脚本把"过期"从静默失效变成一条可主动运行的检查。**不设定时任务**，beta 期人工按需运行即可。
 
@@ -212,7 +284,9 @@ export const chatchatValues = {
 2. **不回归** —— 断言 §1.3 中 11 个当前正确的模型解析结果不变（防止新条目意外成为它们的更长匹配）
 3. **无兜底** —— 断言 `modelSpecs` 全部 28 个模型均不落 `defaultRate`
 4. **单位一致** —— 断言 `chatchatValues` 全部条目为正数且在合理量级（0.01 ~ 200），拦截"忘记乘 1e6"这类错误
-5. **完整性** —— 断言 `chatchatValues` 的键集合是 `modelSpecs` 中 model 值的子集，防止表中残留已下线模型
+5. **完整性** —— 断言 `chatchatValues` 与 `chatchatCacheValues` 的键集合均为 `modelSpecs` 中 model 值的子集，防止表中残留已下线模型
+6. **缓存费率生效** —— 对 25 个支持缓存的模型断言 `getCacheMultiplier()` 返回我们的条目；断言 `read < input` 对每个条目成立（缓存读取永远比 input 便宜，该不变量能拦截字段写反）
+7. **不支持缓存的模型无条目** —— 断言 `gpt-5.4-pro` / `deepseek/deepseek-chat` 的 `getCacheMultiplier()` 返回 `null`，其缓存 token 按 input 满价计费
 
 第 2 项尤其重要：新增一个较长的键可能改变某个上游模型的匹配结果。测试需以 `librechat.yaml` 的 `modelSpecs` 为数据源，而非硬编码模型列表 —— 新增模型时测试应自动覆盖。
 
@@ -223,14 +297,14 @@ export const chatchatValues = {
 ### 7.1 在范围内
 
 - `packages/data-schemas/src/methods/chatchat.ts`（新增）
-- `packages/data-schemas/src/methods/tx.ts`（一行：`tokenValues` 的 `Object.assign` 追加 `chatchatValues` 参数）
+- `packages/data-schemas/src/methods/tx.ts`（三行：`tokenValues` 的 `Object.assign` 追加 `chatchatValues`；`cacheTokenValues` 由对象字面量包成 `Object.assign({ ... }, chatchatCacheValues)`）
 - `config/check-model-prices.js`（新增，只读比对脚本）
 - 上述测试
 
 ### 7.2 不在范围内
 
 - **历史交易数据修正**。费率在写入时固化，现存 90 条记录（合计约 $0.40）保持原值。该量级下重算无意义，但成本看板需标注口径变更日期，否则趋势图会将其误读为用量变化。
-- **缓存费率（`cacheTokenValues`）**。两个原因：其一，该常量是纯对象字面量而非 `Object.assign`，扩展它需要额外改动上游结构；其二更关键 —— 它要求 `{ write, read }` 成对取值，而我们 5 个 OpenRouter 模型**均未提供 `input_cache_write`**（`deepseek/deepseek-chat` 连 `input_cache_read` 也没有）。只填 `read` 会使 `write` 取到错误值，比现状更糟。待价格来源确定后单独处理。
+- **Gemini 的缓存存储费**。OpenRouter 的 `input_cache_write` 对 Gemini 是按时长计的存储价（见 §4.3），无法映射到 `cacheTokenValues` 的每 token 模型。该成本不计入，会略微低估 Gemini 的真实开销 —— 但仅在显式创建缓存时产生，而我们目前不使用 Gemini 的显式缓存 API。
 - **`modelPricing.ts` 的去留**。该文件（含 `MODEL_PRICING` / `estimateCost`）目前零调用者，仅有自身 spec 引用。本次不动，单独决策。
 - **gptsapi token 少报问题**。见 §五。
 - **`balance.enabled`**。保持现状 `false`，本 spec 不改变其取值。
