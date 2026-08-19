@@ -21,6 +21,18 @@
  * OpenRouter, this is the original vendor's list price and therefore an upper
  * bound on our cost — a reseller does not charge above list.
  *
+ * Keys are the SHORTEST string that identifies the model family, without the
+ * provider prefix — `grok-4.20`, not `x-ai/grok-4.20`. Because matching is by
+ * substring, a bare key covers every prefixed spelling of the same model. This
+ * matters: production and local `librechat.yaml` have drifted (the file is not
+ * in git), production writing `x-ai/grok-4.20` where local writes
+ * `grok-4.20-beta-0309-reasoning`. Prefixed keys would silently miss on one
+ * side and fall back to a shorter upstream key.
+ *
+ * The exception is `deepseek/deepseek-chat`, which keeps its prefix: a bare
+ * `deepseek-chat` would collide with the upstream key of the same name and
+ * re-price every DeepSeek variant, not just ours.
+ *
  * Re-check with `npm run check-model-prices`.
  */
 
@@ -40,11 +52,15 @@ export const chatchatValues: Record<string, TokenRate> = {
   'gpt-5.4-pro': { prompt: 30, completion: 180 },
   'gpt-5.4-mini': { prompt: 0.75, completion: 4.5 },
   'gpt-5.4-nano': { prompt: 0.2, completion: 1.25 },
-  'x-ai/grok-4.3': { prompt: 1.25, completion: 2.5 },
-  'grok-4.20-beta-0309-reasoning': { prompt: 1.25, completion: 2.5 },
-  'grok-4.20-beta-0309-non-reasoning': { prompt: 1.25, completion: 2.5 },
-  'grok-4.20-multi-agent-beta-0309': { prompt: 1.25, completion: 2.5 },
-  'deepseek-v4-pro': { prompt: 1.32, completion: 3.96 },
+  'grok-4.3': { prompt: 1.25, completion: 2.5 },
+  'grok-4.5': { prompt: 2, completion: 6 },
+  'grok-4.20': { prompt: 1.25, completion: 2.5 },
+  'grok-4.20-multi-agent': { prompt: 1.25, completion: 2.5 },
+  /** Multi-provider on OpenRouter, so the catalogue price tracks whichever
+   *  provider is currently default — observed moving 1.32/3.96 → 1.44/2.88
+   *  within an hour. Expect `check-model-prices` to flag this one periodically;
+   *  the drift is routing, not a vendor price change. */
+  'deepseek-v4-pro': { prompt: 1.44, completion: 2.88 },
   'deepseek-v4-flash': { prompt: 0.0826, completion: 0.1652 },
   'glm-5.2': { prompt: 0.966, completion: 3.036 },
   'glm-5-turbo': { prompt: 1.2, completion: 4 },
@@ -89,11 +105,11 @@ export const chatchatCacheValues: Record<string, CacheRate> = {
   'gpt-5.5': { write: 5, read: 0.5 },
   'gpt-5.4-mini': { write: 0.75, read: 0.075 },
   'gpt-5.4-nano': { write: 0.2, read: 0.02 },
-  'x-ai/grok-4.3': { write: 1.25, read: 0.2 },
-  'grok-4.20-beta-0309-reasoning': { write: 1.25, read: 0.2 },
-  'grok-4.20-beta-0309-non-reasoning': { write: 1.25, read: 0.2 },
-  'grok-4.20-multi-agent-beta-0309': { write: 1.25, read: 0.2 },
-  'deepseek-v4-pro': { write: 1.32, read: 0.044 },
+  'grok-4.3': { write: 1.25, read: 0.2 },
+  'grok-4.5': { write: 2, read: 0.3 },
+  'grok-4.20': { write: 1.25, read: 0.2 },
+  'grok-4.20-multi-agent': { write: 1.25, read: 0.2 },
+  'deepseek-v4-pro': { write: 1.44, read: 0.1215 },
   'deepseek-v4-flash': { write: 0.0826, read: 0.0165 },
   'glm-5.2': { write: 0.966, read: 0.1932 },
   'glm-5-turbo': { write: 1.2, read: 0.24 },

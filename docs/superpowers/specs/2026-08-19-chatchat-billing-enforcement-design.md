@@ -117,16 +117,22 @@ if (userRecord?.autoRefillEnabled !== config.autoRefillEnabled) {
 
 **计费**：图像按张计价，非按 token。`Transaction` 的 `tokenType` 枚举已含 `'credits'`（`schema/transaction.ts:38`），上游 `checkBalance.ts:132` 即用该类型做定额扣减，直接复用，无需扩展 schema。
 
-**定价**：单张成本从配置读取，不硬编码。初始取值需注意两点：
+**定价按 token，不按张。** 图像走独立端点 `POST /api/v1/images`（`providers/openrouter.ts:32`），其模型目录是 `/api/v1/images/models`，与聊天的 `/models` 是两套命名空间。从该目录取得的权威价格（2026-08-19）：
 
-- `google/gemini-3-pro-image` 在 OpenRouter 有 `image_output` 字段，但其单位（每张 / 每 token）未经确认，不能直接采用
-- `openai/gpt-image-2` **不在 OpenRouter 目录中**，无公开来源
+| 模型 | input_image | input_text | output_image |
+|---|---|---|---|
+| `openai/gpt-image-2` | $8/M | $5/M | **$30/M** |
+| `google/gemini-3-pro-image` | $2/M | — | **$120/M** |
 
-因此初始值取供应商公布的每张价格，**并按保守方向上浮** —— 图像计费的首要目的是让这类成本**被计入且受限**，而非精确。高估会让用户的图像额度偏紧，低估会让整个上界失效；两者代价不对称。精确定价待有真实用量后再校准。
+因此图像**不应该拍一个每张定额**，而应与文本走同一套按 token 计费的路径。网上流传的每张价（$0.006–$0.211，各站互相矛盾）是 OpenAI 直连口径，与我们经 OpenRouter 的结算方式不同，不可采用。
+
+**实现障碍**：`providers/openrouter.ts:35` 只取 `res.data?.data?.[0].b64_json`，把响应其余部分连同可能存在的 `usage` 一并丢弃。需先让 `GenerationOutcome` 携带 usage。
+
+响应是否真的带 usage 需实发一次请求才能确认（会产生费用）。因此设计为**有则按 token 计，无则退回配置的每张估值**，估值按保守方向上浮 —— 图像计费的首要目的是让这类成本被计入且受限，而非精确。高估让用户额度偏紧，低估让整个上界失效，两者代价不对称。
 
 ### 3.4 关闭逃生开关并启用兜底限流
 
-- `DISABLE_BILLING_GATING` 置为 `false`（或移除）
+- `DISABLE_BILLING_GATING` 置为 `false`（或移除）—— 生产实测为 `true`，必须翻转，这是本 spec 中唯一一处"不改就完全无效"的动作
 - `LIMIT_MESSAGE_USER=true`，`MESSAGE_USER_MAX` 设为一个远高于正常使用、但能拦住失控脚本的值
 
 限流是**第二道防线**，不替代积分上界：积分按成本计量，限流按次数计量，后者拦不住"少量请求消耗巨额 token"。它的作用是在积分体系本身出故障时兜底。
@@ -180,10 +186,23 @@ if (userRecord?.autoRefillEnabled !== config.autoRefillEnabled) {
 
 ---
 
-## 六、依赖用户确认的事项
+## 六、生产现状实测（2026-08-19，经 SSH 核对）
 
-1. **生产 `DISABLE_BILLING_GATING` 的实际取值** —— 本地 `.env` 未设置，`.env.example` 注释为 `false`，但生产配置在 Coolify 上加密存储，需登录确认。若已为 `true`，§3.4 即为将其翻转；若本就未设置，则该项无需改动。
-2. **两个图像模型的每张真实成本** —— 见 §3.3，无公开 API 来源。
+不再是待确认事项 —— 已在生产主机上直接读取：
+
+| 项 | 实测值 | 含义 |
+|---|---|---|
+| `DISABLE_BILLING_GATING` | **`true`** | 逃生开关开着，门控对全部登录用户失效 |
+| `CHECK_BALANCE` | 未设置 | 走代码默认 |
+| `LIMIT_MESSAGE_USER` | 未设置 | 无每用户消息上限 |
+| `librechat.yaml` 的 `balance:` 块 | **不存在** | 余额永不扣减 |
+| `librechat.yaml` 的 `transactions:` 块 | 不存在 | 交易记录默认开启（与库中 90 条一致） |
+
+四项叠加，**登录用户的消耗当前没有任何上限**，§二的推断得到证实。
+
+Coolify API 无法读取环境变量值（token 缺 `read:sensitive`，响应中 `value` 字段被整体剥离），只能经 SSH 在容器内 `printenv`。
+
+图像模型的每张真实成本仍待定，但性质已变 —— 见 §3.3 更新。
 
 ---
 

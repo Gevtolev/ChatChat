@@ -38,8 +38,24 @@ const DRIFT_TOLERANCE = 0.005;
  * differ for anything we route through gptsapi. Only entries listed here can be
  * price-checked — everything else is reported as unverifiable rather than
  * silently assumed correct.
+ *
+ * Both spellings of the OpenRouter-routed models are listed, because
+ * `librechat.yaml` is not in git and the production copy has drifted from the
+ * local one — production writes `x-ai/grok-4.20`, local writes
+ * `grok-4.20-beta-0309-reasoning`. Running this script against a local file
+ * therefore proves nothing about production; see the caveat printed at the end.
  */
 const OPENROUTER_IDS = {
+  'x-ai/grok-4.20': 'x-ai/grok-4.20',
+  'x-ai/grok-4.20-multi-agent': 'x-ai/grok-4.20-multi-agent',
+  'x-ai/grok-4.5': 'x-ai/grok-4.5',
+  'z-ai/glm-5.2': 'z-ai/glm-5.2',
+  'z-ai/glm-5-turbo': 'z-ai/glm-5-turbo',
+  'moonshotai/kimi-k2.6': 'moonshotai/kimi-k2.6',
+  'minimax/minimax-m3': 'minimax/minimax-m3',
+  'deepseek/deepseek-v4-pro': 'deepseek/deepseek-v4-pro',
+  'deepseek/deepseek-v4-flash': 'deepseek/deepseek-v4-flash',
+  'gpt-4o-mini': 'openai/gpt-4o-mini',
   'gemini-2.5-flash': 'google/gemini-2.5-flash',
   'gemini-2.5-flash-lite': 'google/gemini-2.5-flash-lite',
   'gemini-3.1-pro-preview': 'google/gemini-3.1-pro-preview',
@@ -178,10 +194,15 @@ function productionModels() {
     console.green(`  ${model}: ok`);
   }
 
-  const stale = Object.keys(chatchatValues).filter((model) => !models.includes(model));
-  const staleCache = Object.keys(chatchatCacheValues).filter((model) => !models.includes(model));
-  for (const model of new Set([...stale, ...staleCache])) {
-    console.orange(`  ${model}: overridden but no longer in modelSpecs — dead entry`);
+  /** Keys are model-family substrings, not full model IDs, so a key is live
+   *  when some configured model resolves to it — string equality would flag
+   *  every bare key as dead. */
+  const liveKeys = new Set(models.map((model) => findMatchingPattern(model, tokenValues)));
+  const unused = [...Object.keys(chatchatValues), ...Object.keys(chatchatCacheValues)].filter(
+    (key) => !liveKeys.has(key),
+  );
+  for (const key of new Set(unused)) {
+    console.orange(`  ${key}: overridden but no configured model resolves to it`);
   }
 
   console.purple('----------------------------------------');
@@ -190,6 +211,13 @@ function productionModels() {
   console.cyan(`  on defaultRate:${problems.fallback}`);
   console.cyan(`  missing cache: ${problems.uncovered}`);
   console.cyan(`  unverifiable:  ${problems.unverifiable}`);
+
+  console.orange(
+    '\n  Checked against the LOCAL librechat.yaml. That file is not in git and the\n' +
+      '  production copy has drifted before — model IDs there carry provider\n' +
+      '  prefixes this file omits. A clean run here does not prove production is\n' +
+      '  covered; verify the deployed config separately when models change.',
+  );
 
   const blocking = problems.drift + problems.fallback + problems.uncovered;
   if (blocking > 0) {

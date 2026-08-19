@@ -48,6 +48,8 @@
 | `grok-4.20-beta-0309-non-reasoning` | 3 / 15 | 1.25 / 2.5 | 2.4× / 6× |
 | `grok-4.20-multi-agent-beta-0309` | 3 / 15 | 1.25 / 2.5 | 2.4× / 6× |
 
+上表的模型 ID 取自**本地** `librechat.yaml`；生产用的是另一套拼写，且多出一个 `x-ai/grok-4.5`。见 §1.5。
+
 ### 1.3 正确的 11 个
 
 全部 Claude 系列（opus 4-5/4-6/4-7/4-8、sonnet 4-6 及 thinking 变体、haiku 4-5）、`gemini-2.5-flash`、`gemini-2.5-flash-lite`、`gemini-3.1-pro-preview`、`gpt-5.4` 与上游表精确一致，无需改动。
@@ -73,7 +75,30 @@
 
 叠加效应示例，仍用上面那条真实记录：当前扣 `387 × 3 = 1161` credits；修正基础费率后为 `259×1.25 + 128×1.25 = 484`；再修正缓存费率后为 `259×1.25 + 128×0.2 = 349`。**缓存修正在基础修正之上再降 28%。**对话越长缓存占比越高，该比例还会上升。
 
-### 1.5 业务后果
+### 1.5 生产配置与本地已分叉（实施中发现）
+
+上述 §1.1–1.4 的模型清单取自**本地** `librechat.yaml`。该文件**不在 git 里**，实施过程中经 SSH 核对生产副本，发现两者已经分叉：
+
+| | 本地 | 生产 |
+|---|---|---|
+| Grok 4.20 | `grok-4.20-beta-0309-reasoning` 等三个变体 | `x-ai/grok-4.20`、`x-ai/grok-4.20-multi-agent` |
+| Grok 4.5 | 无 | `x-ai/grok-4.5`（本地没有这个模型） |
+| GLM / Kimi / MiniMax / DeepSeek | 裸名 `glm-5.2` | 带前缀 `z-ai/glm-5.2` |
+| modelSpecs 写法 | 块式 `preset:` 多行 | 行内流式 `preset: { ... }` |
+
+带前缀的那些靠子串匹配歪打正着（`z-ai/glm-5.2` 含 `glm-5.2`），但 **grok 系列三个模型匹配不上**，落回 `grok-4` 的 3/15：
+
+| 生产模型 | 若按本地清单建表则计费 | 真实 |
+|---|---|---|
+| `x-ai/grok-4.20` | 3 / 15 | 1.25 / 2.5 |
+| `x-ai/grok-4.20-multi-agent` | 3 / 15 | 1.25 / 2.5 |
+| `x-ai/grok-4.5` | 3 / 15 | 2 / 6 |
+
+**由此确立键的命名规则：使用不带供应商前缀的最短模型族名**（`grok-4.20` 而非 `x-ai/grok-4.20`）。子串匹配下裸键对两种拼写都生效，这是唯一能抗配置漂移的写法。
+
+唯一例外是 `deepseek/deepseek-chat` 保留前缀 —— 裸 `deepseek-chat` 会与上游同名键碰撞，把所有 DeepSeek 变体一起改价。
+
+### 1.6 业务后果
 
 - **少扣**：真实成本高于记录成本，成本看板会低估，告警不会触发
 - **多扣**：用户月度积分被过快消耗，提前撞到"额度用尽"，beta 期表现为留存损失
@@ -162,7 +187,9 @@ if (lowerKey.length > bestLength && lowerModelName.includes(lowerKey)) {
 }
 ```
 
-我们写入**精确 model ID**，长度必然不小于上游任何前缀条目，因此确定性胜出，且不依赖对象键顺序 —— 上游未来增删条目不会改变结果。
+我们写入的键长度必然大于上游那些更短的前缀条目（`grok-4.20` 长于 `grok-4`），因此确定性胜出，且不依赖对象键顺序 —— 上游未来增删条目不会改变结果。
+
+键本身取**不带供应商前缀的最短模型族名**，理由见 §1.5：这样一个键同时覆盖 `grok-4.20` 与 `x-ai/grok-4.20` 两种拼写，不受配置漂移影响。
 
 该性质必须有测试固定（§六）。
 
@@ -189,22 +216,26 @@ if (lowerKey.length > bestLength && lowerModelName.includes(lowerKey)) {
 
 ```ts
 export const chatchatValues = {
-  'gemini-3-flash-preview':           { prompt: 0.5,    completion: 3      },
-  'gpt-5.5':                          { prompt: 5,      completion: 30     },
-  'gpt-5.4-pro':                      { prompt: 30,     completion: 180    },
-  'gpt-5.4-mini':                     { prompt: 0.75,   completion: 4.5    },
-  'gpt-5.4-nano':                     { prompt: 0.2,    completion: 1.25   },
-  'x-ai/grok-4.3':                    { prompt: 1.25,   completion: 2.5    },
-  'grok-4.20-beta-0309-reasoning':     { prompt: 1.25,   completion: 2.5    },
-  'grok-4.20-beta-0309-non-reasoning': { prompt: 1.25,   completion: 2.5    },
-  'grok-4.20-multi-agent-beta-0309':   { prompt: 1.25,   completion: 2.5    },
-  'deepseek-v4-pro':                  { prompt: 1.32,   completion: 3.96   },
-  'deepseek-v4-flash':                { prompt: 0.0826, completion: 0.1652 },
-  'glm-5.2':                          { prompt: 0.966,  completion: 3.036  },
-  'glm-5-turbo':                      { prompt: 1.2,    completion: 4      },
-  'kimi-k2.6':                        { prompt: 0.95,   completion: 4      },
-  'MiniMax-M3':                       { prompt: 0.3,    completion: 1.2    },
-  'deepseek/deepseek-chat':           { prompt: 0.2574, completion: 1.0287 },
+  'gemini-3-flash-preview': { prompt: 0.5, completion: 3 },
+  'gpt-5.5': { prompt: 5, completion: 30 },
+  'gpt-5.4-pro': { prompt: 30, completion: 180 },
+  'gpt-5.4-mini': { prompt: 0.75, completion: 4.5 },
+  'gpt-5.4-nano': { prompt: 0.2, completion: 1.25 },
+  'grok-4.3': { prompt: 1.25, completion: 2.5 },
+  'grok-4.5': { prompt: 2, completion: 6 },
+  'grok-4.20': { prompt: 1.25, completion: 2.5 },
+  'grok-4.20-multi-agent': { prompt: 1.25, completion: 2.5 },
+  /** Multi-provider on OpenRouter, so the catalogue price tracks whichever
+   *  provider is currently default — observed moving 1.32/3.96 → 1.44/2.88
+   *  within an hour. Expect `check-model-prices` to flag this one periodically;
+   *  the drift is routing, not a vendor price change. */
+  'deepseek-v4-pro': { prompt: 1.44, completion: 2.88 },
+  'deepseek-v4-flash': { prompt: 0.0826, completion: 0.1652 },
+  'glm-5.2': { prompt: 0.966, completion: 3.036 },
+  'glm-5-turbo': { prompt: 1.2, completion: 4 },
+  'kimi-k2.6': { prompt: 0.95, completion: 4 },
+  'MiniMax-M3': { prompt: 0.3, completion: 1.2 },
+  'deepseek/deepseek-chat': { prompt: 0.2574, completion: 1.0287 },
 };
 ```
 
@@ -246,11 +277,11 @@ export const chatchatCacheValues = {
   'gpt-5.5': { write: 5, read: 0.5 },
   'gpt-5.4-mini': { write: 0.75, read: 0.075 },
   'gpt-5.4-nano': { write: 0.2, read: 0.02 },
-  'x-ai/grok-4.3': { write: 1.25, read: 0.2 },
-  'grok-4.20-beta-0309-reasoning': { write: 1.25, read: 0.2 },
-  'grok-4.20-beta-0309-non-reasoning': { write: 1.25, read: 0.2 },
-  'grok-4.20-multi-agent-beta-0309': { write: 1.25, read: 0.2 },
-  'deepseek-v4-pro': { write: 1.32, read: 0.044 },
+  'grok-4.3': { write: 1.25, read: 0.2 },
+  'grok-4.5': { write: 2, read: 0.3 },
+  'grok-4.20': { write: 1.25, read: 0.2 },
+  'grok-4.20-multi-agent': { write: 1.25, read: 0.2 },
+  'deepseek-v4-pro': { write: 1.44, read: 0.1215 },
   'deepseek-v4-flash': { write: 0.0826, read: 0.0165 },
   'glm-5.2': { write: 0.966, read: 0.1932 },
   'glm-5-turbo': { write: 1.2, read: 0.24 },
@@ -264,6 +295,12 @@ export const chatchatCacheValues = {
 新增脚本 `config/check-model-prices.js`：拉取 OpenRouter 实时价目，与 `chatchatValues` 及 `chatchatCacheValues` 逐项比对，输出偏差报告，只读不写。同时报告 `modelSpecs` 中存在但两表均未覆盖的模型 —— 新增模型时最容易漏的就是这一步。
 
 这是路线选择的直接代价 —— 手工表会过期。脚本把"过期"从静默失效变成一条可主动运行的检查。**不设定时任务**，beta 期人工按需运行即可。
+
+两点必须写进脚本输出，否则它给的是虚假的安心：
+
+**其一，脚本读的是本地 `librechat.yaml`，而生产副本会分叉（见 §1.5）。** 本地跑通不证明生产被覆盖。
+
+**其二，OpenRouter 的模型级 `pricing` 反映的是当前默认供应商，会随路由变动。** 实测 `deepseek/deepseek-v4-pro` 在一小时内从 1.32/3.96 变为 1.44/2.88；同期抽查的 21 个模型中仅此一例，所以波动局限于多供应商模型而非普遍现象。这类告警是路由变化不是厂商调价，需人工判断而非自动跟随。
 
 ---
 
