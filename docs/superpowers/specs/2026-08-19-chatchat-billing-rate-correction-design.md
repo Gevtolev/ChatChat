@@ -223,7 +223,7 @@ export const chatchatValues = {
 ### 7.1 在范围内
 
 - `packages/data-schemas/src/methods/chatchat.ts`（新增）
-- `packages/data-schemas/src/methods/tx.ts`（一行：`Object.assign` 追加参数，`cacheTokenValues` 同理）
+- `packages/data-schemas/src/methods/tx.ts`（一行：`tokenValues` 的 `Object.assign` 追加 `chatchatValues` 参数）
 - `config/check-model-prices.js`（新增，只读比对脚本）
 - 上述测试
 
