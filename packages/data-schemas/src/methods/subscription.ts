@@ -63,10 +63,37 @@ export function createSubscriptionMethods(mongoose: typeof import('mongoose')) {
     return doc.toObject() as ISubscriptionLean;
   }
 
+  /**
+   * Current plan for each of the given users, in one round trip.
+   *
+   * Users with no entitled subscription are simply absent from the result —
+   * callers treat that as the implicit free plan rather than as an error.
+   */
+  async function findActiveSubscriptions(
+    userIds: string[],
+  ): Promise<Array<{ user_id: string; plan_code: string }>> {
+    if (userIds.length === 0) {
+      return [];
+    }
+    const Subscription = mongoose.models.Subscription as Model<ISubscription>;
+    const docs = await Subscription.find({
+      user_id: { $in: userIds.map((id) => new mongoose.Types.ObjectId(id)) },
+      status: { $in: ACTIVE_STATUSES },
+    })
+      .select('user_id plan_code')
+      .lean();
+
+    return docs.map((doc) => ({
+      user_id: String(doc.user_id),
+      plan_code: doc.plan_code,
+    }));
+  }
+
   return {
     getActiveSubscriptionRecord,
     expireActiveSubscriptions,
     createSubscription,
+    findActiveSubscriptions,
   };
 }
 

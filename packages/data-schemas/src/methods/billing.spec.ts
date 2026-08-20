@@ -276,6 +276,55 @@ describe('billing methods', () => {
       const inDb = await Subscription.findById(result._id).lean();
       expect(inDb).not.toBeNull();
     });
+
+    it('findActiveSubscriptions returns one row per user, entitled statuses only', async () => {
+      const userA = new mongoose.Types.ObjectId();
+      const userB = new mongoose.Types.ObjectId();
+      const userC = new mongoose.Types.ObjectId();
+      const now = new Date();
+      await Subscription.create([
+        {
+          user_id: userA,
+          plan_code: 'pro_m',
+          status: 'active',
+          source: 'admin',
+          current_period_start: now,
+          current_period_end: now,
+        },
+        {
+          user_id: userB,
+          plan_code: 'trial',
+          status: 'trialing',
+          source: 'admin',
+          current_period_start: now,
+          current_period_end: now,
+        },
+        {
+          user_id: userC,
+          plan_code: 'pro_h',
+          status: 'expired',
+          source: 'admin',
+          current_period_start: now,
+          current_period_end: now,
+        },
+      ]);
+
+      const rows = await subscriptionMethods.findActiveSubscriptions([
+        userA.toString(),
+        userB.toString(),
+        userC.toString(),
+      ]);
+
+      const byUser = new Map(rows.map((row) => [row.user_id, row.plan_code]));
+      expect(byUser.get(userA.toString())).toBe('pro_m');
+      expect(byUser.get(userB.toString())).toBe('trial');
+      /** An expired subscription grants nothing, so it must not appear. */
+      expect(byUser.has(userC.toString())).toBe(false);
+    });
+
+    it('findActiveSubscriptions returns an empty array for an empty id list', async () => {
+      expect(await subscriptionMethods.findActiveSubscriptions([])).toEqual([]);
+    });
   });
 
   describe('QuotaMethods', () => {
