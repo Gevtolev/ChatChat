@@ -33,7 +33,6 @@ import { createGroupModel } from './group';
 import { createConfigModel } from './config';
 import { createSubscriptionModel } from './subscription';
 import { createQuotaModel } from './quota';
-import { createUsageLogModel } from './usageLog';
 import { createAuditLogModel } from './auditLog';
 
 /**
@@ -76,7 +75,6 @@ export function createModels(mongoose: typeof import('mongoose')) {
     Config: createConfigModel(mongoose),
     Subscription: createSubscriptionModel(mongoose),
     Quota: createQuotaModel(mongoose),
-    UsageLog: createUsageLogModel(mongoose),
     AuditLog: createAuditLogModel(mongoose),
   };
 }

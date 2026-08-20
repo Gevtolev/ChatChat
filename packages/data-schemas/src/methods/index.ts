@@ -76,7 +76,6 @@ import { createConfigMethods, type ConfigMethods } from './config';
 /* Billing */
 import { createSubscriptionMethods, type SubscriptionMethods } from './subscription';
 import { createQuotaMethods, type QuotaMethods } from './quota';
-import { createUsageLogMethods, type UsageLogMethods } from './usageLog';
 import { createAuditLogMethods, type AuditLogMethods } from './auditLog';
 
 export { RoleConflictError, DEFAULT_REFRESH_TOKEN_EXPIRY, DEFAULT_SESSION_EXPIRY };
@@ -120,7 +119,6 @@ export type AllMethods = UserMethods &
   ConfigMethods &
   SubscriptionMethods &
   QuotaMethods &
-  UsageLogMethods &
   AuditLogMethods;
 
 /** Dependencies injected from the api layer into createMethods */
@@ -255,7 +253,6 @@ export function createMethods(
     /* Billing */
     ...createSubscriptionMethods(mongoose),
     ...createQuotaMethods(mongoose),
-    ...createUsageLogMethods(mongoose),
     ...createAuditLogMethods(mongoose),
   };
 }
@@ -305,6 +302,5 @@ export type {
   ConfigMethods,
   SubscriptionMethods,
   QuotaMethods,
-  UsageLogMethods,
   AuditLogMethods,
 };

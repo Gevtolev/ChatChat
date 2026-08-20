@@ -31,14 +31,14 @@ Design decisions that override or extend the upstream guidance:
 - **No Stripe / payment until post-MVP stage 6.** All plan changes during MVP go through admin API (or CLI fallback). Do not introduce `stripe-node`, webhook handlers, or `stripe_customer_id` fields before stage 6.
 - **Plan changes are event-driven**: any source (admin API, CLI, future Stripe webhook) must call `applyPlanChange()`. Direct `Subscription.create / update` outside that entry point is forbidden — verified by grep at stage 3 acceptance.
 - **Quota check-and-increment must be atomic** (single `findOneAndUpdate` with `$inc` and upper-bound filter). Never read-then-write — race conditions will let users overrun their plan.
-- **Cost auditing via `UsageLog`** (per `user_id × model_id × day`). Internal only; never exposed to users.
+- **Cost auditing aggregates `Transaction` at read time** (per user × model × day). Internal only; never exposed to users. There is deliberately no second cost table — `Transaction` is written by `spendTokens` on every generation and is the single source.
 
 ### Code locations for ChatChat-specific work
 
 New business code goes into existing workspaces — no new top-level packages:
 
 - Magic-link service, billing module (`plans.ts`, `applyPlanChange.ts`, `gating.ts`, `modelPricing.ts`), admin routes, marketing endpoints → [packages/api/src/](packages/api/src/) (TypeScript)
-- New schemas (`LoginToken`, `Subscription`, `Quota`, `UsageLog`, `AuditLog`, `WaitlistEntry`, `ContactSubmission`) → [packages/data-schemas/src/schema/](packages/data-schemas/src/schema/)
+- New schemas (`LoginToken`, `Subscription`, `Quota`, `AuditLog`, `WaitlistEntry`, `ContactSubmission`) → [packages/data-schemas/src/schema/](packages/data-schemas/src/schema/)
 - Shared types (`PlanCode`, `CostTier`, billing types) → [packages/data-provider/src/types/](packages/data-provider/src/types/)
 - Frontend billing UI (`PlanBadge`, `QuotaBar`, `UpgradeModal`, `ModelLockTooltip`), marketing pages, admin UI → [client/src/](client/src/)
 - Thin Express wrappers calling into `packages/api` → [api/server/routes/](api/server/routes/)

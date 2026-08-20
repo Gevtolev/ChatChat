@@ -2,26 +2,21 @@ import mongoose from 'mongoose';
 import { MongoMemoryServer } from 'mongodb-memory-server';
 import subscriptionSchema from '~/schema/subscription';
 import quotaSchema from '~/schema/quota';
-import usageLogSchema from '~/schema/usageLog';
 import auditLogSchema from '~/schema/auditLog';
 import type { ISubscription } from '~/types/subscription';
 import type { IQuota } from '~/types/quota';
-import type { IUsageLog } from '~/types/usageLog';
 import type { IAuditLog } from '~/types/auditLog';
 import { createSubscriptionMethods } from './subscription';
 import { createQuotaMethods } from './quota';
-import { createUsageLogMethods } from './usageLog';
 import { createAuditLogMethods } from './auditLog';
 
 let mongoServer: MongoMemoryServer;
 let Subscription: mongoose.Model<ISubscription>;
 let Quota: mongoose.Model<IQuota>;
-let UsageLog: mongoose.Model<IUsageLog>;
 let AuditLog: mongoose.Model<IAuditLog>;
 
 let subscriptionMethods: ReturnType<typeof createSubscriptionMethods>;
 let quotaMethods: ReturnType<typeof createQuotaMethods>;
-let usageLogMethods: ReturnType<typeof createUsageLogMethods>;
 let auditLogMethods: ReturnType<typeof createAuditLogMethods>;
 
 beforeAll(async () => {
@@ -31,12 +26,10 @@ beforeAll(async () => {
   Subscription =
     mongoose.models.Subscription || mongoose.model<ISubscription>('Subscription', subscriptionSchema);
   Quota = mongoose.models.Quota || mongoose.model<IQuota>('Quota', quotaSchema);
-  UsageLog = mongoose.models.UsageLog || mongoose.model<IUsageLog>('UsageLog', usageLogSchema);
   AuditLog = mongoose.models.AuditLog || mongoose.model<IAuditLog>('AuditLog', auditLogSchema);
 
   subscriptionMethods = createSubscriptionMethods(mongoose);
   quotaMethods = createQuotaMethods(mongoose);
-  usageLogMethods = createUsageLogMethods(mongoose);
   auditLogMethods = createAuditLogMethods(mongoose);
 });
 
@@ -49,7 +42,6 @@ beforeEach(async () => {
   await mongoose.connection.dropDatabase();
   await Subscription.ensureIndexes();
   await Quota.ensureIndexes();
-  await UsageLog.ensureIndexes();
   await AuditLog.ensureIndexes();
 });
 
@@ -136,61 +128,6 @@ describe('billing schemas', () => {
       await Quota.create({ user_id: userId, period_start: periodStart, messages_used: 0 });
       await expect(
         Quota.create({ user_id: userId, period_start: periodStart, messages_used: 5 }),
-      ).rejects.toThrow();
-    });
-  });
-
-  describe('UsageLog', () => {
-    test('creates a valid usage log document', async () => {
-      const day = new Date('2026-06-22T00:00:00Z');
-      const log = await UsageLog.create({
-        user_id: userId,
-        model_id: 'gpt-4o',
-        day,
-        prompt_tokens: 100,
-        completion_tokens: 50,
-        call_count: 1,
-        estimated_cost_cents: 2,
-      });
-      expect(log._id).toBeDefined();
-      expect(log.model_id).toBe('gpt-4o');
-      expect(log.call_count).toBe(1);
-    });
-
-    test('rejects missing user_id', async () => {
-      await expect(
-        UsageLog.create({
-          model_id: 'gpt-4o',
-          day: new Date(),
-          prompt_tokens: 100,
-          completion_tokens: 50,
-          call_count: 1,
-          estimated_cost_cents: 2,
-        }),
-      ).rejects.toThrow();
-    });
-
-    test('rejects duplicate {user_id, model_id, day} (unique index)', async () => {
-      const day = new Date('2026-06-22T00:00:00Z');
-      await UsageLog.create({
-        user_id: userId,
-        model_id: 'gpt-4o',
-        day,
-        prompt_tokens: 100,
-        completion_tokens: 50,
-        call_count: 1,
-        estimated_cost_cents: 2,
-      });
-      await expect(
-        UsageLog.create({
-          user_id: userId,
-          model_id: 'gpt-4o',
-          day,
-          prompt_tokens: 200,
-          completion_tokens: 100,
-          call_count: 2,
-          estimated_cost_cents: 4,
-        }),
       ).rejects.toThrow();
     });
   });
@@ -388,45 +325,6 @@ describe('billing methods', () => {
       expect(successes).toBe(LIMIT);
       expect(failures).toBe(TOTAL - LIMIT);
     }, 15000);
-  });
-
-  describe('UsageLogMethods', () => {
-    test('recordUsage upserts and accumulates tokens/cost', async () => {
-      const uid = new mongoose.Types.ObjectId();
-
-      await usageLogMethods.recordUsage({
-        userId: uid,
-        modelId: 'gpt-4o',
-        promptTokens: 100,
-        completionTokens: 50,
-        costCents: 2,
-      });
-      await usageLogMethods.recordUsage({
-        userId: uid,
-        modelId: 'gpt-4o',
-        promptTokens: 200,
-        completionTokens: 100,
-        costCents: 4,
-      });
-
-      // Should be a single doc with accumulated values
-      const docs = await UsageLog.find({ user_id: uid, model_id: 'gpt-4o' }).lean();
-      expect(docs).toHaveLength(1);
-      expect(docs[0].prompt_tokens).toBe(300);
-      expect(docs[0].completion_tokens).toBe(150);
-      expect(docs[0].estimated_cost_cents).toBe(6);
-      expect(docs[0].call_count).toBe(2);
-    });
-
-    test('recordUsage creates separate docs for different models', async () => {
-      const uid = new mongoose.Types.ObjectId();
-
-      await usageLogMethods.recordUsage({ userId: uid, modelId: 'gpt-4o', promptTokens: 10, completionTokens: 5, costCents: 1 });
-      await usageLogMethods.recordUsage({ userId: uid, modelId: 'claude-3-5-sonnet', promptTokens: 20, completionTokens: 10, costCents: 2 });
-
-      const docs = await UsageLog.find({ user_id: uid }).lean();
-      expect(docs).toHaveLength(2);
-    });
   });
 
   describe('AuditLogMethods', () => {
