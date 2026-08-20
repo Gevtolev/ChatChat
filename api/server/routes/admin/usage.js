@@ -8,6 +8,7 @@ const db = require('~/models');
 const router = express.Router();
 
 const requireAdminAccess = requireCapability(SystemCapabilities.ACCESS_ADMIN);
+const requireReadUsage = requireCapability(SystemCapabilities.READ_USAGE);
 
 const handlers = createAdminUsageHandlers({
   aggregateUsage: db.aggregateUsage,
@@ -21,6 +22,6 @@ const handlers = createAdminUsageHandlers({
 
 router.use(requireJwtAuth, requireAdminAccess);
 
-router.get('/', handlers.getUsage);
+router.get('/', requireReadUsage, handlers.getUsage);
 
 module.exports = router;
