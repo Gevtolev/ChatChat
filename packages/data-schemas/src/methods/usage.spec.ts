@@ -87,6 +87,18 @@ async function seed() {
       tokenValue: -34,
       createdAt: new Date('2026-08-31T23:59:59Z'),
     },
+    /** Admin credit grants (config/add-balance.js) and auto-refill
+     *  (checkBalance.ts) write tokenType: 'credits' with a POSITIVE
+     *  tokenValue — this must never be counted as spend. */
+    {
+      user: USER_A,
+      tokenType: 'credits',
+      context: 'admin',
+      rate: 1,
+      rawAmount: 100,
+      tokenValue: 100,
+      createdAt: new Date('2026-08-15T00:00:00Z'),
+    },
   ]);
 }
 
@@ -168,6 +180,17 @@ describe('aggregateUsage', () => {
     const days = result.byDay;
     expect(days.find((d) => d.day === '2026-08-01')?.credits).toBe(21);
     expect(days.find((d) => d.day === '2026-08-31')?.credits).toBe(34);
+  });
+
+  it('excludes credit grants (tokenType: credits) from every facet', async () => {
+    const result = await usageMethods.aggregateUsage(RANGE);
+    const a = result.byUser.find((row) => row.user_id === USER_A.toString());
+    /** Would be 1161 + 303 + 47 + 100 and calls 4 if the $100 credit grant
+     *  leaked into spend. */
+    expect(a?.credits).toBe(1161 + 303 + 47);
+    expect(a?.calls).toBe(3);
+    expect(result.byModel.some((row) => row.credits === 100)).toBe(false);
+    expect(result.byDay.find((d) => d.day === '2026-08-15')).toBeUndefined();
   });
 
   it('returns empty arrays rather than throwing when nothing matches', async () => {

@@ -64,7 +64,12 @@ export function createUsageMethods(mongoose: typeof import('mongoose')) {
     const Transaction = mongoose.models.Transaction as Model<ITransaction>;
 
     const pipeline: PipelineStage[] = [
-      { $match: { createdAt: { $gte: args.from, $lte: args.to } } },
+      {
+        $match: {
+          createdAt: { $gte: args.from, $lte: args.to },
+          tokenType: { $in: ['prompt', 'completion'] },
+        },
+      },
       {
         $facet: {
           byUser: [
