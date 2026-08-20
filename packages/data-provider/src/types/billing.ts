@@ -38,3 +38,53 @@ export interface PlanConfig {
     web_search: boolean;
   };
 }
+
+/** 看板一律用 tokenCredits（微美元，1 tokenCredit = $1e-6）作为金额单位，
+ *  只在渲染时除以 1e6。混用美元/分是这类报表最常见的缺陷来源。 */
+export interface AdminUsageUserRow {
+  user_id: string;
+  /** 用户已删除但交易仍在时为 null，UI 退化显示 ID */
+  email: string | null;
+  /** 原始 plan_code；null 表示无 Subscription 记录（隐式 free 档） */
+  plan_code: string | null;
+  /** false = plan_code 不在 PLANS 中。此时 revenue_credits 记 0 并需在 UI 标注，
+   *  不可静默当作免费档 —— 那会把数据异常伪装成正常的低毛利用户。 */
+  plan_recognized: boolean;
+  cost_credits: number;
+  /** 已按订阅周期折算到 30 天，见 §Task 4 */
+  revenue_credits: number;
+  margin_credits: number;
+  calls: number;
+  model_count: number;
+}
+
+export interface AdminUsageModelRow {
+  model: string;
+  /** 'message' | 'title' | 'summarization' | 'subagent' | ... */
+  context: string;
+  cost_credits: number;
+  calls: number;
+  input_tokens: number;
+  write_tokens: number;
+  read_tokens: number;
+}
+
+export interface AdminUsageDayRow {
+  /** 'YYYY-MM-DD'，UTC */
+  day: string;
+  cost_credits: number;
+}
+
+export interface AdminUsageParams {
+  /** ISO 8601 */
+  from: string;
+  to: string;
+}
+
+export interface AdminUsageResponse {
+  from: string;
+  to: string;
+  users: AdminUsageUserRow[];
+  models: AdminUsageModelRow[];
+  days: AdminUsageDayRow[];
+}

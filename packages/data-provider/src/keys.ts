@@ -86,6 +86,7 @@ export enum QueryKeys {
   imageGallery = 'imageGallery',
   imageModels = 'imageModels',
   imageResult = 'imageResult',
+  adminUsage = 'adminUsage',
 }
 
 // Dynamic query keys that require parameters

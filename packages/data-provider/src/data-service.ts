@@ -1,5 +1,6 @@
 import type { AxiosResponse } from 'axios';
 import type * as t from './types';
+import type { AdminUsageParams, AdminUsageResponse } from './types/billing';
 import * as endpoints from './api-endpoints';
 import * as a from './types/assistants';
 import * as ag from './types/agents';
@@ -1088,6 +1089,12 @@ export const updateSkillNodeContent = (variables: {
     updatedAt: now,
   });
 };
+
+/* Admin usage */
+export function getAdminUsage(params: AdminUsageParams): Promise<AdminUsageResponse> {
+  const query = new URLSearchParams({ from: params.from, to: params.to });
+  return request.get(`${endpoints.adminUsage()}?${query.toString()}`);
+}
 
 /* Roles */
 export function listRoles(): Promise<q.ListRolesResponse> {
