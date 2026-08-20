@@ -65,6 +65,9 @@ const loadBookmarkWorkspace = () =>
     Component: m.BookmarkWorkspace,
   }));
 
+const loadAdminUsageView = () =>
+  import('~/components/Admin/Usage/UsagePanel').then((m) => ({ Component: m.default }));
+
 const baseEl = document.querySelector('base');
 const baseHref = baseEl?.getAttribute('href') || '/';
 
@@ -175,6 +178,10 @@ export const router = createBrowserRouter(
             {
               path: 'skills/:skillId/edit',
               lazy: loadSkillsView,
+            },
+            {
+              path: 'admin/usage',
+              lazy: loadAdminUsageView,
             },
             {
               path: 'projects',

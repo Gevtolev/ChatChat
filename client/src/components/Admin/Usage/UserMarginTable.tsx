@@ -70,5 +70,7 @@ export default function UserMarginTable({ users }: { users: AdminUsageUserRow[] 
     [localize],
   );
 
-  return <DataTable columns={columns} data={users} />;
+  return (
+    <DataTable columns={columns} data={users} enableRowSelection={false} showCheckboxes={false} />
+  );
 }
