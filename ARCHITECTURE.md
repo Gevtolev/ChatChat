@@ -394,7 +394,7 @@ stage 5 launch 后(参 [stage-5-launch spec](docs/superpowers/specs/2026-05-21-g
 | **Auth providers (砍)** | Discord / Apple / Facebook / SAML / LDAP / OpenID | **保留** Local password(UI 折叠) / Google / GitHub;**新增** Email Magic Link(参 [stage-2 spec](docs/superpowers/specs/2026-05-21-graupel-stage-2-magic-link.md)) |
 | **Agents + MCP** | 默认显示 | **默认隐藏**,仅 Pro 用户可见(stage 3 plan gating) |
 | **支付** | 无 | **MVP 不接 Stripe**;plan 变更通过 admin API / CLI;事件驱动 `applyPlanChange()` 是唯一入口 |
-| **Quota / 配额** | balance schema | 新增 `Subscription` / `Quota` / `UsageLog`;原子 check-and-increment(单 `findOneAndUpdate`) |
+| **Quota / 配额** | balance schema | 新增 `Subscription` / `Quota`;原子 check-and-increment(单 `findOneAndUpdate`)。成本审计在读时聚合既有 `Transaction`,不新增成本表 |
 | **Marketing 站** | 无 | 新增 SSG(vike)落地页 + pricing + waitlist + 法务页面(stage 4) |
 | **i18n 规则** | 仅改 `en/translation.json`,其他语言由 locize 自动同步 | ChatChat **同时改 `zh-Hans`**(中文用户为主,无 locize),其他语言仍走 locize |
 
@@ -405,10 +405,11 @@ stage 5 launch 后(参 [stage-5-launch spec](docs/superpowers/specs/2026-05-21-g
 | `LoginToken` | magic-link 临时 token + 防枚举 | stage 2 |
 | `Subscription` | 用户订阅状态(plan + period) | `applyPlanChange()` 唯一入口 |
 | `Quota` | 配额计数器(per user × resource × period) | 路由层原子 `$inc` |
-| `UsageLog` | 成本审计(per user × model × day) | 内部审计,**不暴露给用户** |
 | `AuditLog` | 关键操作日志(plan 变更、权限变更) | admin 操作 |
 | `WaitlistEntry` | 落地页 waitlist | marketing 端点 |
 | `ContactSubmission` | 联系表单 | marketing 端点 |
+
+> 成本审计没有独立的表:在读时聚合既有 `Transaction`(per user × model × day),`Transaction` 由 `spendTokens` 在每次生成时写入,是唯一数据源;内部审计,**不暴露给用户**。
 
 ### 12.3 Stage 进度表(本表是预算与里程碑,非实时状态)
 
