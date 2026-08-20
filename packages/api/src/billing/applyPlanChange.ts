@@ -53,7 +53,8 @@ export interface PlanChangeDeps {
 // Period-days defaults per plan_code
 // ---------------------------------------------------------------------------
 
-const PERIOD_DAYS: Record<PlanCode, number> = {
+/** 各档订阅周期天数。成本看板用它把周期总价折算成 30 天口径的收入。 */
+export const PERIOD_DAYS: Record<PlanCode, number> = {
   pro_m: 30,
   pro_q: 90,
   pro_h: 180,
