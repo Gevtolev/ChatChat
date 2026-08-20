@@ -24,7 +24,8 @@ beforeAll(async () => {
   const mongoUri = mongoServer.getUri();
   await mongoose.connect(mongoUri);
   Subscription =
-    mongoose.models.Subscription || mongoose.model<ISubscription>('Subscription', subscriptionSchema);
+    mongoose.models.Subscription ||
+    mongoose.model<ISubscription>('Subscription', subscriptionSchema);
   Quota = mongoose.models.Quota || mongoose.model<IQuota>('Quota', quotaSchema);
   AuditLog = mongoose.models.AuditLog || mongoose.model<IAuditLog>('AuditLog', auditLogSchema);
 
@@ -248,7 +249,10 @@ describe('billing methods', () => {
       const modified = await subscriptionMethods.expireActiveSubscriptions(uid);
       expect(modified).toBe(2);
 
-      const remaining = await Subscription.find({ user_id: uid, status: { $in: ['active', 'trialing', 'admin_granted'] } });
+      const remaining = await Subscription.find({
+        user_id: uid,
+        status: { $in: ['active', 'trialing', 'admin_granted'] },
+      });
       expect(remaining).toHaveLength(0);
     });
 
