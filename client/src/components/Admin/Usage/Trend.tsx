@@ -1,6 +1,5 @@
 import React, { useMemo } from 'react';
 import type { AdminUsageDayRow } from 'librechat-data-provider';
-import type { TranslationKeys } from '~/hooks';
 import { useLocalize } from '~/hooks';
 import { creditsToUsd } from './format';
 
@@ -29,17 +28,13 @@ export default function Trend({ days }: { days: AdminUsageDayRow[] }) {
   const total = useMemo(() => days.reduce((sum, day) => sum + day.cost_credits, 0), [days]);
 
   if (days.length === 0) {
-    return (
-      <p className="text-sm text-text-secondary">
-        {localize('com_ui_admin_usage_empty' as TranslationKeys)}
-      </p>
-    );
+    return <p className="text-sm text-text-secondary">{localize('com_ui_admin_usage_empty')}</p>;
   }
 
   return (
     <figure className="w-full">
       <figcaption className="mb-2 text-sm text-text-secondary">
-        {localize('com_ui_admin_usage_trend_caption' as TranslationKeys, {
+        {localize('com_ui_admin_usage_trend_caption', {
           total: creditsToUsd(total),
         })}
       </figcaption>
@@ -47,7 +42,7 @@ export default function Trend({ days }: { days: AdminUsageDayRow[] }) {
         viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
         className="h-32 w-full"
         role="img"
-        aria-label={localize('com_ui_admin_usage_trend' as TranslationKeys)}
+        aria-label={localize('com_ui_admin_usage_trend')}
         preserveAspectRatio="none"
       >
         {path !== '' && (
