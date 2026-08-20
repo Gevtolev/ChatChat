@@ -7,7 +7,7 @@ import UserMarginTable from './UserMarginTable';
 import CostBreakdown from './CostBreakdown';
 import Trend from './Trend';
 
-type Preset = 'month' | 'days30' | 'all';
+export type Preset = 'month' | 'days30' | 'all';
 
 /** Defaults to a rolling 30 days rather than the calendar month: billing
  *  anchors differ per user, so a rolling window is what compares against a
@@ -79,7 +79,7 @@ export default function UsagePanel() {
             <h2 id="usage-users" className="mb-2 text-lg">
               {localize('com_ui_admin_usage_by_user')}
             </h2>
-            <UserMarginTable users={data.users} />
+            <UserMarginTable users={data.users} preset={preset} />
           </section>
 
           <section aria-labelledby="usage-breakdown">

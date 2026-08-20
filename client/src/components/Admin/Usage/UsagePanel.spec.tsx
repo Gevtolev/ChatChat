@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import { RecoilRoot } from 'recoil';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -137,6 +137,43 @@ describe('UsagePanel', () => {
     expect(screen.getByText('com_ui_admin_usage_breakdown')).toBeInTheDocument();
     expect(screen.getByText('com_ui_admin_usage_trend')).toBeInTheDocument();
     expect(screen.getByText('a@example.com')).toBeInTheDocument();
+  });
+
+  it('suppresses revenue and margin outside the 30-day preset', () => {
+    mockUseAdminUsageQuery.mockReturnValue({
+      isLoading: false,
+      error: null,
+      data: {
+        from: '2026-08-01T00:00:00Z',
+        to: '2026-08-31T00:00:00Z',
+        users: [
+          {
+            user_id: 'u1',
+            email: 'a@example.com',
+            plan_code: 'pro_m',
+            plan_recognized: true,
+            cost_credits: 1_000_000,
+            revenue_credits: 29_990_000,
+            margin_credits: 28_990_000,
+            calls: 4,
+            model_count: 2,
+          },
+        ],
+        models: [],
+        days: [],
+      },
+    });
+    renderPanel();
+    /** Default preset is the 30-day range: revenue/margin are shown. */
+    expect(screen.getByText('com_ui_admin_usage_revenue')).toBeInTheDocument();
+    expect(screen.getByText('com_ui_admin_usage_margin')).toBeInTheDocument();
+    expect(screen.queryByText('com_ui_admin_usage_margin_unavailable')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByText('com_ui_admin_usage_range_month'));
+
+    expect(screen.queryByText('com_ui_admin_usage_revenue')).not.toBeInTheDocument();
+    expect(screen.queryByText('com_ui_admin_usage_margin')).not.toBeInTheDocument();
+    expect(screen.getByText('com_ui_admin_usage_margin_unavailable')).toBeInTheDocument();
   });
 
   it('renders an error message when the query fails', () => {

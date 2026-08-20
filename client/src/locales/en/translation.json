@@ -735,6 +735,7 @@
   "com_ui_admin_usage_error": "Could not load usage data.",
   "com_ui_admin_usage_forbidden": "Admin access required.",
   "com_ui_admin_usage_margin": "Margin",
+  "com_ui_admin_usage_margin_unavailable": "Margin needs a full 30-day billing period to compare against revenue. Showing cost only for this range.",
   "com_ui_admin_usage_model": "Model",
   "com_ui_admin_usage_models": "Models used",
   "com_ui_admin_usage_plan": "Plan",
