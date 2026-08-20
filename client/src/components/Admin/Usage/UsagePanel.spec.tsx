@@ -18,6 +18,53 @@ jest.mock('~/hooks', () => ({
   useLocalize: () => (key: string) => key,
 }));
 
+interface MockVirtualItem {
+  key: number;
+  index: number;
+  start: number;
+  end: number;
+  size: number;
+}
+
+/**
+ * jsdom performs no layout, so the real @tanstack/react-virtual always
+ * measures a zero-size viewport and renders no rows regardless of `count`.
+ * UserMarginTable's DataTable depends on it — so this suite needs a mock,
+ * scoped to this file only, to have real row content to assert against.
+ *
+ * `packages/client` carries its own nested copy of @tanstack/react-virtual
+ * (see packages/client/node_modules/@tanstack/react-virtual) rather than
+ * resolving to the workspace-root one this test file would otherwise mock,
+ * so the module name is resolved relative to @librechat/client itself
+ * rather than passed as the bare specifier.
+ */
+jest.mock(
+  require.resolve('@tanstack/react-virtual', {
+    paths: [require.resolve('@librechat/client')],
+  }),
+  () => ({
+    useVirtualizer: ({
+      count,
+      estimateSize,
+    }: {
+      count: number;
+      estimateSize: (index: number) => number;
+    }) => {
+      const items: MockVirtualItem[] = [];
+      let offset = 0;
+      for (let index = 0; index < count; index += 1) {
+        const size = estimateSize(index);
+        items.push({ key: index, index, start: offset, end: offset + size, size });
+        offset += size;
+      }
+      return {
+        getVirtualItems: () => items,
+        getTotalSize: () => offset,
+      };
+    },
+  }),
+);
+
 function renderPanel() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
@@ -45,6 +92,7 @@ describe('UsagePanel', () => {
     renderPanel();
     expect(screen.queryByText('com_ui_admin_usage_error')).not.toBeInTheDocument();
     expect(screen.getByText('com_ui_admin_usage_title')).toBeInTheDocument();
+    expect(screen.getByRole('status')).toBeInTheDocument();
   });
 
   it('renders the three sections on success', () => {

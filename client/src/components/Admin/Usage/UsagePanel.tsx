@@ -66,7 +66,11 @@ export default function UsagePanel() {
         </div>
       </header>
 
-      {isLoading && <Spinner />}
+      {isLoading && (
+        <div role="status" aria-live="polite" aria-label={localize('com_ui_loading')}>
+          <Spinner />
+        </div>
+      )}
       {error != null && <p className="text-red-500">{localize('com_ui_admin_usage_error')}</p>}
 
       {data != null && (
