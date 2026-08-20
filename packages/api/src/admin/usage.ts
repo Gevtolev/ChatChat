@@ -17,7 +17,7 @@ function monthlyRevenueCredits(planCode: string): number | null {
     return null;
   }
   const periodDays = PERIOD_DAYS[planCode as PlanCode];
-  return Math.round((plan.monthly_price_cents * 30) / periodDays) * CREDITS_PER_CENT;
+  return Math.round((plan.monthly_price_cents * 30 * CREDITS_PER_CENT) / periodDays);
 }
 
 export interface AdminUsageDeps {

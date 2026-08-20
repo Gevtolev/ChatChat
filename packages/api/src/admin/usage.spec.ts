@@ -1,3 +1,4 @@
+import type { AdminUsageUserRow } from 'librechat-data-provider';
 import type { Response } from 'express';
 import type { ServerRequest } from '~/types/http';
 import { createAdminUsageHandlers } from './usage';
@@ -73,9 +74,9 @@ describe('getUsage — margin', () => {
     const res = mockRes();
     await createAdminUsageHandlers(deps).getUsage(req(RANGE), res);
 
-    const row = (res.body as { users: Array<Record<string, unknown>> }).users[0];
+    const row = (res.body as { users: AdminUsageUserRow[] }).users[0];
     /** 7999 cents over 90 days -> 2666.33 cents per 30 days -> 26_663_333 credits */
-    expect(row.revenue_credits).toBe(Math.round((7999 * 30) / 90) * 10_000);
+    expect(row.revenue_credits).toBe(Math.round((7999 * 30 * 10_000) / 90));
     expect(row.margin_credits).toBe((row.revenue_credits as number) - 1_000_000);
   });
 
@@ -91,7 +92,7 @@ describe('getUsage — margin', () => {
     const res = mockRes();
     await createAdminUsageHandlers(deps).getUsage(req(RANGE), res);
 
-    const row = (res.body as { users: Array<Record<string, unknown>> }).users[0];
+    const row = (res.body as { users: AdminUsageUserRow[] }).users[0];
     expect(row.plan_code).toBeNull();
     expect(row.plan_recognized).toBe(true);
     expect(row.revenue_credits).toBe(0);
@@ -112,7 +113,7 @@ describe('getUsage — margin', () => {
     const res = mockRes();
     await createAdminUsageHandlers(deps).getUsage(req(RANGE), res);
 
-    const row = (res.body as { users: Array<Record<string, unknown>> }).users[0];
+    const row = (res.body as { users: AdminUsageUserRow[] }).users[0];
     expect(row.plan_recognized).toBe(false);
     expect(row.revenue_credits).toBe(0);
   });
@@ -128,7 +129,7 @@ describe('getUsage — margin', () => {
     const res = mockRes();
     await createAdminUsageHandlers(deps).getUsage(req(RANGE), res);
 
-    const row = (res.body as { users: Array<Record<string, unknown>> }).users[0];
+    const row = (res.body as { users: AdminUsageUserRow[] }).users[0];
     expect(row.user_id).toBe('ghost');
     expect(row.email).toBeNull();
     expect(row.cost_credits).toBe(42);
