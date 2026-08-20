@@ -8,6 +8,7 @@ let usageMethods: ReturnType<typeof createUsageMethods>;
 
 const USER_A = new mongoose.Types.ObjectId();
 const USER_B = new mongoose.Types.ObjectId();
+const USER_C = new mongoose.Types.ObjectId();
 
 /** Transactions store spends as negatives; the pipeline must return positives. */
 async function seed() {
@@ -65,6 +66,26 @@ async function seed() {
       rawAmount: -999,
       tokenValue: -999,
       createdAt: new Date('2026-07-01T00:00:00Z'),
+    },
+    {
+      user: USER_C,
+      tokenType: 'prompt',
+      model: 'glm-5.2',
+      context: 'message',
+      rate: 1,
+      rawAmount: -21,
+      tokenValue: -21,
+      createdAt: new Date('2026-08-01T00:00:00Z'),
+    },
+    {
+      user: USER_C,
+      tokenType: 'prompt',
+      model: 'glm-5.2',
+      context: 'message',
+      rate: 1,
+      rawAmount: -34,
+      tokenValue: -34,
+      createdAt: new Date('2026-08-31T23:59:59Z'),
     },
   ]);
 }
@@ -129,8 +150,24 @@ describe('aggregateUsage', () => {
 
   it('groups by UTC day, ascending', async () => {
     const result = await usageMethods.aggregateUsage(RANGE);
-    expect(result.byDay.map((d) => d.day)).toEqual(['2026-08-10', '2026-08-11']);
-    expect(result.byDay[0].credits).toBe(1161 + 303);
+    expect(result.byDay.map((d) => d.day)).toEqual([
+      '2026-08-01',
+      '2026-08-10',
+      '2026-08-11',
+      '2026-08-31',
+    ]);
+    expect(result.byDay[1].credits).toBe(1161 + 303);
+  });
+
+  it('includes documents exactly on the inclusive range boundaries', async () => {
+    const result = await usageMethods.aggregateUsage(RANGE);
+    const c = result.byUser.find((row) => row.user_id === USER_C.toString());
+    expect(c?.credits).toBe(21 + 34);
+    expect(c?.calls).toBe(2);
+
+    const days = result.byDay;
+    expect(days.find((d) => d.day === '2026-08-01')?.credits).toBe(21);
+    expect(days.find((d) => d.day === '2026-08-31')?.credits).toBe(34);
   });
 
   it('returns empty arrays rather than throwing when nothing matches', async () => {

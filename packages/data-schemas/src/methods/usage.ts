@@ -1,4 +1,4 @@
-import type { Model, PipelineStage } from 'mongoose';
+import type { Model, PipelineStage, Types } from 'mongoose';
 import type { ITransaction } from '~/schema/transaction';
 
 export interface UsageByUser {
@@ -30,7 +30,7 @@ export interface UsageAggregate {
 }
 
 interface RawUserRow {
-  _id: unknown;
+  _id: Types.ObjectId;
   credits: number;
   calls: number;
   models: (string | null)[];
