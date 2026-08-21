@@ -13,8 +13,13 @@ const {
 require('./helpers');
 
 /**
- * Compares the rates we bill against OpenRouter's live catalogue, and reports
- * any model in `librechat.yaml` that no table covers.
+ * Checks every model in `librechat.yaml` on two axes: is its provider still
+ * offering it, and are we billing it at the right rate.
+ *
+ * Availability is checked first because a retired model's price is beside the
+ * point, and because that failure is otherwise invisible — no provider tells us
+ * when it drops a model, so the first symptom is a user picking it and getting
+ * an error. Seven of ours had already vanished from gptsapi before this ran.
  *
  * Read-only. Nothing here writes to the database or to source — it prints a
  * report and exits non-zero when something needs attention, so it can be wired
@@ -29,6 +34,21 @@ require('./helpers');
  */
 
 const OPENROUTER_MODELS_URL = 'https://openrouter.ai/api/v1/models';
+
+/**
+ * Keys for reading each provider's model list, by host. OpenRouter's list is
+ * public; gptsapi's returns 401 without one.
+ *
+ * These are normally already populated: requiring `@librechat/data-schemas`
+ * above pulls in dotenv transitively, which loads `.env`. The undefined case
+ * therefore only arises where no `.env` exists — CI, say — and it downgrades
+ * that host to "unchecked" rather than failing the run, so the price half still
+ * works without secrets.
+ */
+const PROVIDER_KEYS = {
+  'api.gptsapi.net': process.env.GPTSAPI_KEY,
+  'openrouter.ai': process.env.OPENROUTER_KEY,
+};
 
 /** Tolerance below which a difference is rounding, not a price change. */
 const DRIFT_TOLERANCE = 0.005;
@@ -118,11 +138,62 @@ function drifted(ours, live) {
   return Math.abs(ours - live) > DRIFT_TOLERANCE;
 }
 
-function productionModels() {
+function loadConfig() {
   const configPath = path.resolve(__dirname, '..', 'librechat.yaml');
-  const config = yaml.load(fs.readFileSync(configPath, 'utf8'));
+  return yaml.load(fs.readFileSync(configPath, 'utf8'));
+}
+
+function productionModels(config) {
   const list = config?.modelSpecs?.list ?? [];
   return [...new Set(list.map((spec) => spec?.preset?.model).filter(Boolean))];
+}
+
+/**
+ * Maps each configured model to the API base that actually serves it, by
+ * following its endpoint's `baseURL`. Derived rather than hard-coded, so adding
+ * an endpoint to the yaml needs no change here — and the base is carried whole
+ * rather than rebuilt from the host, because the two providers mount their
+ * model lists at different paths (`/api/v1` against `/v1`).
+ */
+function modelBases(config) {
+  const baseByEndpoint = new Map();
+  for (const endpoint of config?.endpoints?.custom ?? []) {
+    if (endpoint?.name && endpoint?.baseURL) {
+      baseByEndpoint.set(endpoint.name, endpoint.baseURL.replace(/\/+$/, ''));
+    }
+  }
+
+  const bases = new Map();
+  for (const spec of config?.modelSpecs?.list ?? []) {
+    const model = spec?.preset?.model;
+    const base = baseByEndpoint.get(spec?.preset?.endpoint);
+    if (model && base) {
+      bases.set(model, base);
+    }
+  }
+  return bases;
+}
+
+/**
+ * Model ids currently offered by a provider, or null when they cannot be read.
+ *
+ * A provider silently dropping a model is the failure this catches: nothing
+ * warns us, and the first symptom is a user picking it and getting an error.
+ * Seven of our models had already disappeared from gptsapi before this check
+ * existed.
+ */
+async function providerCatalogue(base, apiKey) {
+  const headers = apiKey ? { Authorization: `Bearer ${apiKey}` } : undefined;
+  try {
+    const response = await fetch(`${base}/models`, { headers });
+    if (!response.ok) {
+      return null;
+    }
+    const body = await response.json();
+    return new Set((body?.data ?? []).map((model) => model.id));
+  } catch {
+    return null;
+  }
 }
 
 (async () => {
@@ -138,10 +209,40 @@ function productionModels() {
   const { data } = await response.json();
   const catalogue = new Map(data.map((model) => [model.id, model]));
 
-  const models = productionModels();
-  const problems = { drift: 0, fallback: 0, unverifiable: 0, uncovered: 0 };
+  const config = loadConfig();
+  const models = productionModels(config);
+  const bases = modelBases(config);
+  const problems = { drift: 0, fallback: 0, unverifiable: 0, uncovered: 0, retired: 0 };
+
+  /** One catalogue fetch per distinct provider, not one per model — and none at
+   *  all for OpenRouter, whose list was already fetched above for pricing. */
+  const catalogues = new Map();
+  for (const base of new Set(bases.values())) {
+    catalogues.set(
+      base,
+      new URL(base).host === 'openrouter.ai'
+        ? new Set(catalogue.keys())
+        : await providerCatalogue(base, PROVIDER_KEYS[new URL(base).host]),
+    );
+  }
+  for (const [base, catalogueForBase] of catalogues) {
+    if (catalogueForBase === null) {
+      console.orange(
+        `  ${new URL(base).host}: model list unreadable — availability unchecked for its models`,
+      );
+    }
+  }
 
   for (const model of models) {
+    /** Availability first: a retired model's price is beside the point. */
+    const base = bases.get(model);
+    const catalogueForBase = base ? catalogues.get(base) : undefined;
+    if (catalogueForBase && !catalogueForBase.has(model)) {
+      console.red(`  ${model}: ${new URL(base).host} no longer offers it — selecting it will fail`);
+      problems.retired++;
+      continue;
+    }
+
     const key = findMatchingPattern(model, tokenValues);
     const rate = key ? tokenValues[key] : null;
 
@@ -207,19 +308,22 @@ function productionModels() {
 
   console.purple('----------------------------------------');
   console.cyan(`  checked:       ${models.length}`);
+  console.cyan(`  retired:       ${problems.retired}`);
   console.cyan(`  price drift:   ${problems.drift}`);
   console.cyan(`  on defaultRate:${problems.fallback}`);
   console.cyan(`  missing cache: ${problems.uncovered}`);
   console.cyan(`  unverifiable:  ${problems.unverifiable}`);
 
   console.orange(
-    '\n  Checked against the LOCAL librechat.yaml. That file is not in git and the\n' +
-      '  production copy has drifted before — model IDs there carry provider\n' +
-      '  prefixes this file omits. A clean run here does not prove production is\n' +
-      '  covered; verify the deployed config separately when models change.',
+    '\n  Checked against the LOCAL librechat.yaml — both the prices and the\n' +
+      '  availability. That file is not in git and the production copy has drifted\n' +
+      '  before: production writes provider-prefixed ids this file omits, and routes\n' +
+      '  some vendors through a different endpoint entirely. So a retired/ok verdict\n' +
+      '  here is a verdict on the local file, not on production. Verify the deployed\n' +
+      '  config separately whenever models change.',
   );
 
-  const blocking = problems.drift + problems.fallback + problems.uncovered;
+  const blocking = problems.retired + problems.drift + problems.fallback + problems.uncovered;
   if (blocking > 0) {
     console.red(`\n${blocking} model(s) need attention.`);
     process.exit(1);
