@@ -56,11 +56,15 @@ export const chatchatValues: Record<string, TokenRate> = {
   'grok-4.5': { prompt: 2, completion: 6 },
   'grok-4.20': { prompt: 1.25, completion: 2.5 },
   'grok-4.20-multi-agent': { prompt: 1.25, completion: 2.5 },
-  /** Multi-provider on OpenRouter, so the catalogue price tracks whichever
-   *  provider is currently default — observed moving 1.32/3.96 → 1.44/2.88
-   *  within an hour. Expect `check-model-prices` to flag this one periodically;
-   *  the drift is routing, not a vendor price change. */
-  'deepseek-v4-pro': { prompt: 1.44, completion: 2.88 },
+  /** Moves for two separate reasons, so read a `check-model-prices` alarm on
+   *  this entry carefully before assuming either. DeepSeek raised its list
+   *  price (1.44/2.88 → 1.60/3.20, confirmed 2026-08-20), and independently the
+   *  model is multi-provider on OpenRouter, whose catalogue price tracks
+   *  whichever provider is currently default — a transient 1.32/3.96 reading
+   *  was observed within an hour of a 1.44/2.88 one. A sustained move is a
+   *  price change worth following; a reading that reverts on the next check is
+   *  routing. */
+  'deepseek-v4-pro': { prompt: 1.6, completion: 3.2 },
   'deepseek-v4-flash': { prompt: 0.0826, completion: 0.1652 },
   'glm-5.2': { prompt: 0.966, completion: 3.036 },
   'glm-5-turbo': { prompt: 1.2, completion: 4 },
@@ -109,7 +113,7 @@ export const chatchatCacheValues: Record<string, CacheRate> = {
   'grok-4.5': { write: 2, read: 0.3 },
   'grok-4.20': { write: 1.25, read: 0.2 },
   'grok-4.20-multi-agent': { write: 1.25, read: 0.2 },
-  'deepseek-v4-pro': { write: 1.44, read: 0.1215 },
+  'deepseek-v4-pro': { write: 1.6, read: 0.135 },
   'deepseek-v4-flash': { write: 0.0826, read: 0.0165 },
   'glm-5.2': { write: 0.966, read: 0.1932 },
   'glm-5-turbo': { write: 1.2, read: 0.24 },
