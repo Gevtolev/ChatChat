@@ -47,6 +47,26 @@ export interface CacheRate {
 }
 
 export const chatchatValues: Record<string, TokenRate> = {
+  /** Current generation. Upstream either has no entry for these or resolves
+   *  them to an older sibling — `gpt-5.6-luna` would otherwise bill at
+   *  `gpt-5`'s 1.25/10 against its real 0.2/1.2, and `kimi-k3` at `kimi-k2`'s
+   *  2/5 against a real 3/15, which under-bills us.
+   *
+   *  `claude-opus-5` and `claude-sonnet-5` are deliberately absent: upstream
+   *  already prices both correctly, base and cache, so an override here would
+   *  be pure duplication and one more thing to keep in sync. */
+  'gpt-5.6-sol': { prompt: 2.5, completion: 15 },
+  'gpt-5.6-terra': { prompt: 2, completion: 12 },
+  'gpt-5.6-luna': { prompt: 0.2, completion: 1.2 },
+  'gemini-3.7-flash': { prompt: 0.375, completion: 1.875 },
+  'grok-4.6': { prompt: 2, completion: 6 },
+  'glm-5.3': { prompt: 1.4, completion: 4.4 },
+  /** Prefixed against the convention, because a bare `kimi-k3` is 7 characters
+   *  and loses the longest-match to upstream's `moonshot` at 8 — it would bill
+   *  2/5 instead of 3/15. Its sibling `kimi-k2.6` needs no prefix only because
+   *  9 characters happens to beat the same key. */
+  'moonshotai/kimi-k3': { prompt: 3, completion: 15 },
+
   'gemini-3-flash-preview': { prompt: 0.5, completion: 3 },
   'gpt-5.5': { prompt: 5, completion: 30 },
   'gpt-5.4-pro': { prompt: 30, completion: 180 },
@@ -99,6 +119,15 @@ export const chatchatValues: Record<string, TokenRate> = {
  * correct upstream values, so overriding them would add drift for no gain.
  */
 export const chatchatCacheValues: Record<string, CacheRate> = {
+  /** Current generation, matching the base rates above. */
+  'gpt-5.6-sol': { write: 2.5, read: 0.25 },
+  'gpt-5.6-terra': { write: 2, read: 0.2 },
+  'gpt-5.6-luna': { write: 0.2, read: 0.02 },
+  'gemini-3.7-flash': { write: 0.375, read: 0.0375 },
+  'grok-4.6': { write: 2, read: 0.5 },
+  'glm-5.3': { write: 1.4, read: 0.26 },
+  'moonshotai/kimi-k3': { write: 3, read: 0.3 },
+
   /** Base rates for these two are already correct upstream, but neither has a
    *  cache entry, so cached reads were billing at the full input rate — 10x
    *  their real cost. Cache coverage is independent of base-rate coverage. */
