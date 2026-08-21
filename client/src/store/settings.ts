@@ -16,7 +16,11 @@ const staticAtoms = {
 
 const localStorageAtoms = {
   // General settings
-  autoScroll: atomWithLocalStorage('autoScroll', false),
+  /** Opening a past conversation lands on the latest message rather than the
+   *  top. Only reaches users with no stored preference — `atomWithLocalStorage`
+   *  persists on change, not on init, so anyone who set this either way keeps
+   *  their choice. */
+  autoScroll: atomWithLocalStorage('autoScroll', true),
   sidebarExpanded: atomWithLocalStorage(
     'unifiedSidebarExpanded',
     typeof window !== 'undefined' && window.matchMedia('(max-width: 768px)').matches ? false : true,
