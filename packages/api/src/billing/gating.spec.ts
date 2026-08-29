@@ -90,7 +90,7 @@ describe('checkBillingAccess — model tier gating', () => {
     const userId = new mongoose.Types.ObjectId();
 
     await expectDenied(
-      checkBillingAccess({ userId, modelId: 'gpt-5.4-mini' }, buildGatingDeps()),
+      checkBillingAccess({ userId, modelId: 'gpt-5.4-nano' }, buildGatingDeps()),
       'upgrade_required_quota',
     );
   });
@@ -178,11 +178,11 @@ describe('checkBillingAccess — feature gating', () => {
   test('featureFlag set + free plan + cheap model → throws feature_not_available', async () => {
     expect.assertions(2);
     const userId = new mongoose.Types.ObjectId();
-    // gpt-5-mini is cheap (passes tier check), but agents=false on free plan
+    // gpt-5.4-nano is cheap (passes tier check), but agents=false on free plan
 
     await expectDenied(
       checkBillingAccess(
-        { userId, modelId: 'gpt-5.4-mini', featureFlag: 'agents' },
+        { userId, modelId: 'gpt-5.4-nano', featureFlag: 'agents' },
         buildGatingDeps(),
       ),
       'feature_not_available',
