@@ -1,27 +1,34 @@
 const path = require('path');
 const mongoose = require('mongoose');
-const { PLANS } = require('@librechat/api');
+const { PLANS, applyPlanChange, buildPlanChangeDeps } = require('@librechat/api');
 const { createModels, createMethods } = require('@librechat/data-schemas');
 require('module-alias')({ base: path.resolve(__dirname, '..', 'api') });
 const { silentExit } = require('./helpers');
 const connect = require('./connect');
 
 /**
- * Grants each existing user the credit balance their current plan entitles them
- * to, and arms monthly auto-refill.
+ * Brings every pre-existing account up to what the gate expects: an active
+ * subscription, and a Balance holding its plan's grant.
  *
- * Needed once, when credit metering is switched on: `applyPlanChange` grants
- * credits going forward, but users who subscribed before that code existed have
- * no Balance document. Since the gate reads a missing row as zero — deliberately,
- * so a failed grant can't hand out free capacity — they would all be refused
- * until they happened to change plans.
+ * Needed once, when credit metering is switched on. Two separate holes leave
+ * accounts unable to send a single message the moment enforcement lands, and
+ * the gate reads a missing Balance as zero rather than as unlimited —
+ * deliberately, so a grant that never landed cannot hand out free capacity:
  *
- * Idempotent: users who already hold a Balance are skipped, never topped up. Run
- * it twice and the second run reports every user as skipped.
+ *   no subscription at all — everyone who signed up through OAuth, because
+ *     `createSocialUser` never called `applyPlanChange`. Granted the plan named
+ *     by `--plan`.
+ *   subscription but no Balance — signed up before the grant existed. Given
+ *     their existing plan's credits.
+ *
+ * Idempotent by construction: the first case is skipped once a subscription
+ * exists, the second once a Balance does. Neither tops up. GUEST accounts are
+ * left alone — the anonymous trial is counted in messages, not credits.
  *
  * Usage:
- *   npm run backfill-plan-credits           # apply
- *   npm run backfill-plan-credits -- --dry  # report only, write nothing
+ *   npm run backfill-plan-credits -- --dry           # report only, write nothing
+ *   npm run backfill-plan-credits                    # subscription-less users → free
+ *   npm run backfill-plan-credits -- --plan beta     # ...→ beta instead
  */
 (async () => {
   await connect();
@@ -29,31 +36,61 @@ const connect = require('./connect');
   const methods = createMethods(mongoose);
 
   const dryRun = process.argv.includes('--dry');
+  const planIndex = process.argv.indexOf('--plan');
+  const targetPlan = planIndex > -1 ? process.argv[planIndex + 1] : 'free';
+
+  if (PLANS[targetPlan] == null) {
+    console.red(`Unknown --plan '${targetPlan}'. Known: ${Object.keys(PLANS).join(', ')}`);
+    silentExit(1);
+  }
 
   console.purple('----------------------------------------');
   console.purple(dryRun ? 'Backfill plan credits (DRY RUN)' : 'Backfill plan credits');
+  console.purple(`Subscription-less users will be granted: ${targetPlan}`);
   console.purple('----------------------------------------');
 
   const Subscription = mongoose.models.Subscription;
   const Balance = mongoose.models.Balance;
-  if (Subscription == null || Balance == null) {
-    console.red('Subscription or Balance model is not registered — nothing to do.');
+  const User = mongoose.models.User;
+  if (Subscription == null || Balance == null || User == null) {
+    console.red('Subscription, Balance or User model is not registered — nothing to do.');
     silentExit(1);
   }
 
-  /** Only currently-entitled subscriptions; expired ones grant nothing. */
-  const subscriptions = await Subscription.find({
-    status: { $in: ['active', 'trialing', 'admin_granted'] },
-  })
-    .select('user_id plan_code status')
+  const ENTITLED = ['active', 'trialing', 'admin_granted'];
+  const tally = { adopted: 0, granted: 0, skipped: 0, noGrant: 0, unknownPlan: 0, credits: 0 };
+
+  /**
+   * Pass 1 — accounts with no entitled subscription at all. `applyPlanChange` is
+   * the only sanctioned way to create one (see project CLAUDE.md), and it grants
+   * the credits as its final step, so these need no second visit.
+   */
+  const users = await User.find({ role: { $ne: 'GUEST' } })
+    .select('_id email')
     .lean();
 
-  if (subscriptions.length === 0) {
-    console.orange('No active subscriptions found.');
-    silentExit(0);
+  for (const user of users) {
+    const sub = await Subscription.findOne({ user_id: user._id, status: { $in: ENTITLED } })
+      .select('_id')
+      .lean();
+    if (sub != null) {
+      continue;
+    }
+    if (!dryRun) {
+      await applyPlanChange(
+        { user_id: user._id, plan_code: targetPlan, source: 'cli' },
+        buildPlanChangeDeps(methods),
+      );
+    }
+    const label = user.email || String(user._id);
+    console.green(`  ${label}: no subscription → ${targetPlan}`);
+    tally.adopted++;
   }
 
-  const tally = { granted: 0, skipped: 0, noGrant: 0, unknownPlan: 0, credits: 0 };
+  /** Pass 2 — subscriptions that predate the credit grant. */
+  const subscriptions = await Subscription.find({ status: { $in: ENTITLED } })
+    .select('user_id plan_code status')
+    .lean();
 
   for (const sub of subscriptions) {
     const plan = PLANS[sub.plan_code];
@@ -85,6 +122,7 @@ const connect = require('./connect');
   }
 
   console.purple('----------------------------------------');
+  console.cyan(`  new subs:      ${tally.adopted}`);
   console.cyan(`  granted:       ${tally.granted}`);
   console.cyan(`  already had:   ${tally.skipped}`);
   console.cyan(`  plan grants 0: ${tally.noGrant}`);
