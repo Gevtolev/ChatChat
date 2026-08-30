@@ -23,7 +23,7 @@ export type BillingDbMethods = GatingDeps & PlanChangeDeps;
 export function buildGatingDeps(db: BillingDbMethods): GatingDeps {
   return {
     getActiveSubscriptionRecord: db.getActiveSubscriptionRecord,
-    getBalanceCredits: db.getBalanceCredits,
+    refreshMonthlyGrant: db.refreshMonthlyGrant,
     incrementQuota: db.incrementQuota,
   };
 }

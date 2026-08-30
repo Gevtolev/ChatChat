@@ -171,11 +171,17 @@ export async function applyPlanChange(
    * Step 5: Grant the plan's monthly credits and arm Balance's own auto-refill.
    *
    * Monthly reset rides on Balance rather than on a quota period: `spendTokens`
-   * already draws down `tokenCredits` after every generation, and its refill
-   * machinery re-grants on a schedule without a cron job. Setting the balance
-   * outright (rather than incrementing) is what makes the grant non-cumulative
-   * — an unused month does not roll over, which is the subscription semantics
-   * we sell.
+   * already draws down `tokenCredits` after every generation. Setting the
+   * balance outright (rather than incrementing) is what makes the grant
+   * non-cumulative — an unused month does not roll over, which is the
+   * subscription semantics we sell.
+   *
+   * The renewal itself is `refreshMonthlyGrant`, called by the gate on the
+   * user's next request. This comment used to claim Balance's own refill
+   * machinery handled it "without a cron job", which was wrong in a way worth
+   * naming: that machinery lives in upstream's `checkBalance`, which
+   * `BaseClient` only invokes when `balanceConfig.enabled`, and we never enable
+   * upstream's balance system. Nothing renewed anything.
    */
   const credits = PLANS[plan_code].monthly_token_credits;
   if (credits > 0) {

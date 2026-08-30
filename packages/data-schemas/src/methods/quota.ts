@@ -2,6 +2,14 @@ import type { FilterQuery, Model, UpdateQuery } from 'mongoose';
 import type { IQuota, IQuotaLean } from '~/types/quota';
 import type { Types } from 'mongoose';
 
+/**
+ * The grant is monthly whatever the billing period: pro_q bills for 90 days but
+ * still allots one month of credits at a time. Shared by the two functions that
+ * would otherwise disagree — one arms the refill fields, the other decides when
+ * a refill is due.
+ */
+const REFILL_INTERVAL = { value: 1, unit: 'months' } as const;
+
 export function createQuotaMethods(mongoose: typeof import('mongoose')) {
   /** Creates a new quota record for a user + period. */
   async function createQuota(args: {
@@ -106,6 +114,62 @@ export function createQuotaMethods(mongoose: typeof import('mongoose')) {
   }
 
   /**
+   * Resets the balance to the plan's grant if a full interval has passed, and
+   * returns the spendable balance either way. `null` when no Balance row exists.
+   *
+   * Replaces a plain read in the gate because the monthly reset has nowhere else
+   * to happen: upstream's refill lives in `checkBalance`, which `BaseClient`
+   * only calls when `balanceConfig.enabled`, and we do not enable upstream's
+   * balance system — doing so would run a second, parallel gate with its own
+   * error codes alongside `checkBillingAccess`.
+   *
+   * Upstream's refill would also be the wrong shape. It increments by
+   * `refillAmount` once the balance is nearly spent, whereas a subscription
+   * sells a monthly allowance: the balance is *set*, so an unused month does not
+   * roll over, and the reset is driven by the calendar rather than by running
+   * out.
+   *
+   * One conditional pipeline update rather than read-then-write: the comparison
+   * runs server-side, so two concurrent requests cannot both see a stale
+   * `lastRefill` and grant twice.
+   */
+  async function refreshMonthlyGrant(args: {
+    userId: Types.ObjectId;
+    credits: number;
+  }): Promise<number | null> {
+    const Balance = mongoose.models.Balance as Model<Record<string, unknown>>;
+    const now = new Date();
+    const dueAt = new Date(now);
+    dueAt.setMonth(dueAt.getMonth() - REFILL_INTERVAL.value);
+
+    /** A row with no `lastRefill` sorts below any date here, so it refills —
+     *  which is what we want for a grant that was armed without one. */
+    const updated = await Balance.findOneAndUpdate(
+      { user: args.userId, autoRefillEnabled: true },
+      [
+        {
+          $set: {
+            tokenCredits: {
+              $cond: [{ $lte: ['$lastRefill', dueAt] }, args.credits, '$tokenCredits'],
+            },
+            lastRefill: {
+              $cond: [{ $lte: ['$lastRefill', dueAt] }, now, '$lastRefill'],
+            },
+          },
+        },
+      ],
+      { new: true },
+    ).lean();
+
+    if (updated != null) {
+      return (updated.tokenCredits as number) ?? 0;
+    }
+    /** No row, or auto-refill was never armed — fall back to a plain read so a
+     *  manually-created balance is still honoured. */
+    return getBalanceCredits(args.userId);
+  }
+
+  /**
    * Sets a user's balance to their plan's monthly grant and arms Balance's own
    * auto-refill to re-grant the same amount every month.
    *
@@ -124,8 +188,8 @@ export function createQuotaMethods(mongoose: typeof import('mongoose')) {
         $set: {
           tokenCredits: args.credits,
           autoRefillEnabled: true,
-          refillIntervalValue: 1,
-          refillIntervalUnit: 'months',
+          refillIntervalValue: REFILL_INTERVAL.value,
+          refillIntervalUnit: REFILL_INTERVAL.unit,
           refillAmount: args.credits,
           lastRefill: new Date(),
         },
@@ -139,6 +203,7 @@ export function createQuotaMethods(mongoose: typeof import('mongoose')) {
     incrementQuota,
     resetQuota,
     getBalanceCredits,
+    refreshMonthlyGrant,
     grantMonthlyCredits,
   };
 }
