@@ -4,6 +4,7 @@ const { logger } = require('@librechat/data-schemas');
 const {
   countTokens,
   checkBalance,
+  buildGatingDeps,
   getBalanceConfig,
   checkBillingAccess,
   buildMessageFiles,
@@ -571,10 +572,7 @@ class BaseClient {
 
     await checkBillingAccess(
       { userId: this.user, modelId: this.modelOptions?.model ?? this.model },
-      {
-        getActiveSubscriptionRecord: db.getActiveSubscriptionRecord,
-        incrementQuota: db.incrementQuota,
-      },
+      buildGatingDeps(db),
     );
 
     const { completion, metadata } = await this.sendCompletion(payload, opts);

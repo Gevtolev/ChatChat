@@ -1,5 +1,5 @@
 const { FileSources } = require('librechat-data-provider');
-const { handleExistingUser } = require('./process');
+const { handleExistingUser, createSocialUser } = require('./process');
 
 jest.mock('~/server/services/Files/strategies', () => ({
   getStrategyFunctions: jest.fn(),
@@ -19,15 +19,20 @@ jest.mock('~/server/services/Config', () => ({
   getAppConfig: jest.fn().mockResolvedValue({}),
 }));
 
+/** `buildPlanChangeDeps` stays real: its whole job is to assemble a complete
+ *  dependency object, so a stub would defeat the assertion below. */
 jest.mock('@librechat/api', () => ({
   getBalanceConfig: jest.fn(() => ({
     enabled: false,
   })),
+  applyPlanChange: jest.fn(),
+  buildPlanChangeDeps: jest.requireActual('@librechat/api').buildPlanChangeDeps,
 }));
 
 const { getStrategyFunctions } = require('~/server/services/Files/strategies');
 const { resizeAvatar } = require('~/server/services/Files/images/avatar');
-const { updateUser } = require('~/models');
+const { updateUser, createUser, getUserById } = require('~/models');
+const { applyPlanChange } = require('@librechat/api');
 
 describe('handleExistingUser', () => {
   beforeEach(() => {
@@ -238,5 +243,57 @@ describe('handleExistingUser', () => {
     await handleExistingUser(oldUser, avatarUrl, {});
 
     expect(updateUser).not.toHaveBeenCalled();
+  });
+});
+
+describe('createSocialUser — plan grant', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    process.env.CDN_PROVIDER = FileSources.local;
+    getUserById.mockResolvedValue({ _id: 'newuser123' });
+    createUser.mockResolvedValue('newuser123');
+  });
+
+  const args = {
+    email: 'someone@example.com',
+    avatarUrl: null,
+    provider: 'google',
+    providerKey: 'googleId',
+    providerId: 'g-1',
+    username: 'someone',
+    name: 'Some One',
+    appConfig: {},
+    emailVerified: true,
+  };
+
+  /** OAuth signup created the account and stopped, leaving no Subscription and
+   *  no Balance. The gate reads a missing Balance as zero, so those accounts
+   *  would be denied outright once enforcement is on. */
+  it('grants the free plan to a socially-registered user', async () => {
+    await createSocialUser(args);
+
+    expect(applyPlanChange).toHaveBeenCalledTimes(1);
+    expect(applyPlanChange.mock.calls[0][0]).toEqual({
+      user_id: 'newuser123',
+      plan_code: 'free',
+      source: 'system_default',
+    });
+  });
+
+  /** The omission that would throw a TypeError out of `applyPlanChange` rather
+   *  than denying cleanly — see packages/api/src/billing/deps.ts. */
+  it('passes a complete dependency set, grantMonthlyCredits included', () => {
+    return createSocialUser(args).then(() => {
+      const deps = applyPlanChange.mock.calls[0][1];
+      expect(Object.keys(deps).sort()).toEqual(
+        [
+          'createQuota',
+          'createSubscription',
+          'expireActiveSubscriptions',
+          'getActiveSubscriptionRecord',
+          'grantMonthlyCredits',
+        ].sort(),
+      );
+    });
   });
 });

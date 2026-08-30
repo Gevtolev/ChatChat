@@ -6,6 +6,7 @@ export * from './billing/applyPlanChange';
 export * from './billing/modelPricing';
 export * from './billing/modelRegistry';
 export * from './billing/gating';
+export * from './billing/deps';
 /* Admin */
 export * from './admin';
 export * from './cdn';
