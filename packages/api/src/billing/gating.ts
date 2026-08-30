@@ -8,11 +8,15 @@ import type { FeatureKey } from './modelRegistry';
 
 export interface GatingDeps {
   getActiveSubscriptionRecord: (userId: Types.ObjectId) => Promise<ISubscriptionLean | null>;
-  /** Reads the user's remaining tokenCredits. Deliberately read-only: the
-   *  charge itself happens in `spendTokens` once the generation has finished
-   *  and its real token counts are known. A gate that also decremented would
-   *  bill every turn twice. */
-  getBalanceCredits: (userId: Types.ObjectId) => Promise<number | null>;
+  /** Returns the user's spendable tokenCredits, resetting them to the plan's
+   *  grant first when a month has elapsed. It never *decrements*: the charge
+   *  happens in `spendTokens` once the generation has finished and its real
+   *  token counts are known, and a gate that also debited would bill every turn
+   *  twice. */
+  refreshMonthlyGrant: (args: {
+    userId: Types.ObjectId;
+    credits: number;
+  }) => Promise<number | null>;
   /** Only used for `lifetime_message_limit` (the anonymous trial). Credit-metered
    *  plans never touch it. */
   incrementQuota: (args: {
@@ -93,9 +97,17 @@ export async function checkBillingAccess(
 
   /** Plans that grant credits are metered by balance. A missing Balance row
    *  reads as zero rather than as unlimited — a user whose grant never landed
-   *  must be told to upgrade, not handed free capacity. */
+   *  must be told to upgrade, not handed free capacity.
+   *
+   *  This is also where the monthly reset lands. Doing it on read means the
+   *  allowance renews on the user's next request rather than on a cron tick, so
+   *  there is no scheduler to run, and an account nobody uses costs no writes. */
   if (plan.monthly_token_credits > 0) {
-    const credits = (await deps.getBalanceCredits(userId)) ?? 0;
+    const credits =
+      (await deps.refreshMonthlyGrant({
+        userId,
+        credits: plan.monthly_token_credits,
+      })) ?? 0;
     if (credits <= 0) {
       throw new Error(
         JSON.stringify({

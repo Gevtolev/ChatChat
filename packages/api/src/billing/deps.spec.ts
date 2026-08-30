@@ -16,7 +16,7 @@ import type { BillingDbMethods } from './deps';
 /** Stand-ins: the factories only forward references, so identity is all we check. */
 const db = {
   getActiveSubscriptionRecord: jest.fn(),
-  getBalanceCredits: jest.fn(),
+  refreshMonthlyGrant: jest.fn(),
   incrementQuota: jest.fn(),
   expireActiveSubscriptions: jest.fn(),
   grantMonthlyCredits: jest.fn(),
@@ -25,7 +25,7 @@ const db = {
 } as unknown as BillingDbMethods;
 
 describe('buildGatingDeps', () => {
-  const REQUIRED = ['getActiveSubscriptionRecord', 'getBalanceCredits', 'incrementQuota'];
+  const REQUIRED = ['getActiveSubscriptionRecord', 'refreshMonthlyGrant', 'incrementQuota'];
 
   test('supplies every key GatingDeps declares', () => {
     const deps = buildGatingDeps(db);
@@ -40,7 +40,7 @@ describe('buildGatingDeps', () => {
 
   test('forwards the db methods themselves rather than wrapping them', () => {
     const deps = buildGatingDeps(db);
-    expect(deps.getBalanceCredits).toBe(db.getBalanceCredits);
+    expect(deps.refreshMonthlyGrant).toBe(db.refreshMonthlyGrant);
     expect(deps.incrementQuota).toBe(db.incrementQuota);
   });
 });

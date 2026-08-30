@@ -3,6 +3,7 @@ import { MongoMemoryServer } from 'mongodb-memory-server';
 import { createModels, createMethods } from '@librechat/data-schemas';
 import { applyPlanChange } from './applyPlanChange';
 import { checkBillingAccess } from './gating';
+import { buildGatingDeps } from './deps';
 import { PLANS } from './plans';
 
 type BalanceDoc = {
@@ -32,12 +33,14 @@ function buildApplyDeps() {
   };
 }
 
-function buildGatingDeps() {
-  return {
-    getActiveSubscriptionRecord: methods.getActiveSubscriptionRecord,
-    getBalanceCredits: methods.getBalanceCredits,
-    incrementQuota: methods.incrementQuota,
-  };
+/**
+ * The production factory, not a local copy. A hand-built deps object here is
+ * exactly what let four incomplete ones ship: the tests stayed green because
+ * they assembled their own correct version and so only ever exercised the
+ * TypeScript function, never its JavaScript callers.
+ */
+function gatingDeps() {
+  return buildGatingDeps(methods);
 }
 
 beforeAll(async () => {
@@ -77,7 +80,7 @@ describe('checkBillingAccess — model tier gating', () => {
     const userId = new mongoose.Types.ObjectId();
 
     await expectDenied(
-      checkBillingAccess({ userId, modelId: 'gpt-5.5' }, buildGatingDeps()),
+      checkBillingAccess({ userId, modelId: 'gpt-5.5' }, gatingDeps()),
       'upgrade_required_model',
     );
   });
@@ -90,7 +93,7 @@ describe('checkBillingAccess — model tier gating', () => {
     const userId = new mongoose.Types.ObjectId();
 
     await expectDenied(
-      checkBillingAccess({ userId, modelId: 'gpt-5.4-nano' }, buildGatingDeps()),
+      checkBillingAccess({ userId, modelId: 'gpt-5.4-nano' }, gatingDeps()),
       'upgrade_required_quota',
     );
   });
@@ -103,7 +106,7 @@ describe('checkBillingAccess — model tier gating', () => {
     );
 
     await expect(
-      checkBillingAccess({ userId, modelId: 'gpt-5.5' }, buildGatingDeps()),
+      checkBillingAccess({ userId, modelId: 'gpt-5.5' }, gatingDeps()),
     ).resolves.toBeUndefined();
   });
 
@@ -112,7 +115,7 @@ describe('checkBillingAccess — model tier gating', () => {
     const userId = new mongoose.Types.ObjectId();
 
     await expectDenied(
-      checkBillingAccess({ userId, modelId: 'totally-unknown-model-xyz' }, buildGatingDeps()),
+      checkBillingAccess({ userId, modelId: 'totally-unknown-model-xyz' }, gatingDeps()),
       'upgrade_required_model',
     );
   });
@@ -128,7 +131,7 @@ describe('checkBillingAccess — DISABLE_BILLING_GATING escape hatch', () => {
   test('free user + expensive model passes when the flag is enabled, quota untouched', async () => {
     process.env.DISABLE_BILLING_GATING = 'true';
     const userId = new mongoose.Types.ObjectId();
-    const deps = buildGatingDeps();
+    const deps = gatingDeps();
 
     await expect(checkBillingAccess({ userId, modelId: 'gpt-5.5' }, deps)).resolves.toBeUndefined();
 
@@ -142,7 +145,7 @@ describe('checkBillingAccess — DISABLE_BILLING_GATING escape hatch', () => {
     const userId = new mongoose.Types.ObjectId();
 
     await expectDenied(
-      checkBillingAccess({ userId, modelId: 'gpt-5.5' }, buildGatingDeps()),
+      checkBillingAccess({ userId, modelId: 'gpt-5.5' }, gatingDeps()),
       'upgrade_required_model',
     );
   });
@@ -154,7 +157,7 @@ describe('checkBillingAccess — DISABLE_BILLING_GATING escape hatch', () => {
       { user_id: userId, plan_code: 'anonymous', source: 'system_default' },
       buildApplyDeps(),
     );
-    const deps = buildGatingDeps();
+    const deps = gatingDeps();
 
     // anonymous plan allows all tiers but caps at 3 lifetime messages — 3 pass, 4th denied,
     // independent of DISABLE_BILLING_GATING (which still exempts non-anonymous users).
@@ -183,7 +186,7 @@ describe('checkBillingAccess — feature gating', () => {
     await expectDenied(
       checkBillingAccess(
         { userId, modelId: 'gpt-5.4-nano', featureFlag: 'agents' },
-        buildGatingDeps(),
+        gatingDeps(),
       ),
       'feature_not_available',
     );
@@ -199,7 +202,7 @@ describe('checkBillingAccess — feature gating', () => {
     await expect(
       checkBillingAccess(
         { userId, modelId: 'gpt-5.4-mini', featureFlag: 'agents' },
-        buildGatingDeps(),
+        gatingDeps(),
       ),
     ).resolves.toBeUndefined();
   });
@@ -211,7 +214,7 @@ describe('checkBillingAccess — payload shape', () => {
 
     let caughtErr: unknown;
     try {
-      await checkBillingAccess({ userId, modelId: 'gpt-5.5' }, buildGatingDeps());
+      await checkBillingAccess({ userId, modelId: 'gpt-5.5' }, gatingDeps());
     } catch (err) {
       caughtErr = err;
     }
@@ -233,7 +236,7 @@ describe('checkBillingAccess — payload shape', () => {
       { user_id: userId, plan_code: 'anonymous', source: 'system_default' },
       buildApplyDeps(),
     );
-    const deps = buildGatingDeps();
+    const deps = gatingDeps();
 
     for (let i = 0; i < 3; i++) {
       await checkBillingAccess({ userId, modelId: 'gpt-5.4-mini' }, deps);
@@ -267,7 +270,7 @@ describe('checkBillingAccess — the anonymous trial is not credit-metered', () 
       { user_id: userId, plan_code: 'anonymous', source: 'system_default' },
       buildApplyDeps(),
     );
-    const deps = buildGatingDeps();
+    const deps = gatingDeps();
 
     for (let i = 0; i < 3; i++) {
       await checkBillingAccess({ userId, modelId: 'gpt-5.4-mini' }, deps);
@@ -285,12 +288,12 @@ describe('checkBillingAccess — the anonymous trial is not credit-metered', () 
       { user_id: userId, plan_code: 'anonymous', source: 'system_default' },
       buildApplyDeps(),
     );
-    const getBalanceCredits = jest.fn();
+    const refreshMonthlyGrant = jest.fn();
     await checkBillingAccess(
       { userId, modelId: 'gpt-5.4-mini' },
-      { ...buildGatingDeps(), getBalanceCredits },
+      { ...gatingDeps(), refreshMonthlyGrant },
     );
-    expect(getBalanceCredits).not.toHaveBeenCalled();
+    expect(refreshMonthlyGrant).not.toHaveBeenCalled();
   });
 });
 
@@ -306,7 +309,7 @@ describe('checkBillingAccess — balance-driven quota', () => {
       { user_id: userId, plan_code: 'pro_m', source: 'admin' },
       buildApplyDeps(),
     );
-    const deps = buildGatingDeps();
+    const deps = gatingDeps();
 
     await expect(
       checkBillingAccess({ userId, modelId: 'gpt-5.4-mini' }, deps),
@@ -342,7 +345,7 @@ describe('checkBillingAccess — balance-driven quota', () => {
       { user_id: userId, plan_code: 'pro_m', source: 'admin' },
       buildApplyDeps(),
     );
-    const deps = buildGatingDeps();
+    const deps = gatingDeps();
 
     const before = await mongoose.models.Balance.findOne({ user: userId }).lean<BalanceDoc>();
     for (let i = 0; i < 5; i++) {
@@ -351,5 +354,85 @@ describe('checkBillingAccess — balance-driven quota', () => {
     const after = await mongoose.models.Balance.findOne({ user: userId }).lean<BalanceDoc>();
 
     expect(after?.tokenCredits).toBe(before?.tokenCredits);
+  });
+});
+
+describe('checkBillingAccess — monthly grant renewal', () => {
+  /** Ages the balance so the next gate check sees a full interval elapsed. */
+  async function backdateLastRefill(userId: mongoose.Types.ObjectId, monthsAgo: number) {
+    const when = new Date();
+    when.setMonth(when.getMonth() - monthsAgo);
+    await mongoose.models.Balance.updateOne({ user: userId }, { $set: { lastRefill: when } });
+  }
+
+  async function balanceOf(userId: mongoose.Types.ObjectId): Promise<BalanceDoc> {
+    return (await mongoose.models.Balance.findOne({ user: userId }).lean()) as unknown as BalanceDoc;
+  }
+
+  test('a spent balance is restored once a month has passed', async () => {
+    const userId = new mongoose.Types.ObjectId();
+    await applyPlanChange({ user_id: userId, plan_code: 'pro_m', source: 'admin' }, buildApplyDeps());
+
+    await mongoose.models.Balance.updateOne({ user: userId }, { $set: { tokenCredits: 0 } });
+    await backdateLastRefill(userId, 2);
+
+    await expect(
+      checkBillingAccess({ userId, modelId: 'gpt-5.5' }, gatingDeps()),
+    ).resolves.toBeUndefined();
+
+    expect((await balanceOf(userId)).tokenCredits).toBe(PLANS.pro_m.monthly_token_credits);
+  });
+
+  test('a spent balance stays spent inside the same month', async () => {
+    expect.assertions(3);
+    const userId = new mongoose.Types.ObjectId();
+    await applyPlanChange({ user_id: userId, plan_code: 'pro_m', source: 'admin' }, buildApplyDeps());
+
+    await mongoose.models.Balance.updateOne({ user: userId }, { $set: { tokenCredits: 0 } });
+
+    await expectDenied(
+      checkBillingAccess({ userId, modelId: 'gpt-5.5' }, gatingDeps()),
+      'upgrade_required_quota',
+    );
+    expect((await balanceOf(userId)).tokenCredits).toBe(0);
+  });
+
+  /** The subscription sells a monthly allowance, not a savings account: an
+   *  untouched month must not stack on top of the next one. */
+  test('renewal sets the grant rather than adding to it', async () => {
+    const userId = new mongoose.Types.ObjectId();
+    await applyPlanChange({ user_id: userId, plan_code: 'pro_m', source: 'admin' }, buildApplyDeps());
+    await backdateLastRefill(userId, 2);
+
+    await checkBillingAccess({ userId, modelId: 'gpt-5.5' }, gatingDeps());
+
+    expect((await balanceOf(userId)).tokenCredits).toBe(PLANS.pro_m.monthly_token_credits);
+  });
+
+  /** Two requests arriving together must not each hand out a grant. */
+  test('concurrent checks renew exactly once', async () => {
+    const userId = new mongoose.Types.ObjectId();
+    await applyPlanChange({ user_id: userId, plan_code: 'pro_m', source: 'admin' }, buildApplyDeps());
+    await mongoose.models.Balance.updateOne({ user: userId }, { $set: { tokenCredits: 5 } });
+    await backdateLastRefill(userId, 2);
+
+    const deps = gatingDeps();
+    await Promise.all([
+      checkBillingAccess({ userId, modelId: 'gpt-5.5' }, deps),
+      checkBillingAccess({ userId, modelId: 'gpt-5.5' }, deps),
+      checkBillingAccess({ userId, modelId: 'gpt-5.5' }, deps),
+    ]);
+
+    expect((await balanceOf(userId)).tokenCredits).toBe(PLANS.pro_m.monthly_token_credits);
+  });
+
+  test('renewal reuses the interval grantMonthlyCredits armed', async () => {
+    const userId = new mongoose.Types.ObjectId();
+    await applyPlanChange({ user_id: userId, plan_code: 'beta', source: 'admin' }, buildApplyDeps());
+
+    const record = await balanceOf(userId);
+    expect(record.autoRefillEnabled).toBe(true);
+    expect(record.refillIntervalValue).toBe(1);
+    expect(record.refillIntervalUnit).toBe('months');
   });
 });
