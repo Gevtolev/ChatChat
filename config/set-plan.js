@@ -1,6 +1,6 @@
 const path = require('path');
 const mongoose = require('mongoose');
-const { PLANS, applyPlanChange } = require('@librechat/api');
+const { PLANS, applyPlanChange, buildPlanChangeDeps } = require('@librechat/api');
 const { createModels, createMethods } = require('@librechat/data-schemas');
 require('module-alias')({ base: path.resolve(__dirname, '..', 'api') });
 const { askQuestion, silentExit } = require('./helpers');
@@ -69,12 +69,7 @@ const connect = require('./connect');
   try {
     result = await applyPlanChange(
       { user_id: user._id, plan_code: planCode, source: 'cli' },
-      {
-        getActiveSubscriptionRecord: methods.getActiveSubscriptionRecord,
-        expireActiveSubscriptions: methods.expireActiveSubscriptions,
-        createSubscription: methods.createSubscription,
-        createQuota: methods.createQuota,
-      },
+      buildPlanChangeDeps(methods),
     );
   } catch (error) {
     console.red('Error: ' + error.message);

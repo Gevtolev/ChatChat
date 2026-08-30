@@ -83,7 +83,15 @@ export const chatchatValues: Record<string, TokenRate> = {
    *  whichever provider is currently default — a transient 1.32/3.96 reading
    *  was observed within an hour of a 1.44/2.88 one. A sustained move is a
    *  price change worth following; a reading that reverts on the next check is
-   *  routing. */
+   *  routing.
+   *
+   *  Don't wait for a second reading to tell the two apart — ask the model's
+   *  `/api/v1/models/deepseek/deepseek-v4-pro/endpoints` for the per-provider
+   *  spread. On 2026-08-29 that was 17 providers between 0.7010 (StreamLake,
+   *  the then-default, and exactly what the checker reported as the "live"
+   *  price) and 1.7200 (NextBit) — a 2.45x band that our 1.60 sits inside.
+   *  A genuine list-price change moves the whole band; routing moves only
+   *  which end of it the catalogue happens to quote. */
   'deepseek-v4-pro': { prompt: 1.6, completion: 3.2 },
   'deepseek-v4-flash': { prompt: 0.0826, completion: 0.1652 },
   'glm-5.2': { prompt: 0.966, completion: 3.036 },

@@ -13,6 +13,7 @@ const {
   isEnabled,
   applyPlanChange,
   checkEmailConfig,
+  buildPlanChangeDeps,
   setCloudFrontCookies,
   getCloudFrontConfig,
   parseCloudFrontCookieScope,
@@ -33,14 +34,11 @@ const {
   deleteTokens,
   deleteSession,
   createSession,
-  createQuota,
   generateToken,
   deleteUserById,
-  createSubscription,
   generateRefreshToken,
-  expireActiveSubscriptions,
-  getActiveSubscriptionRecord,
 } = require('~/models');
+const db = require('~/models');
 const { getPriorAnonymousUserId } = require('./anonymousAccount');
 const { registerSchema } = require('~/strategies/validators');
 const { getAppConfig } = require('~/server/services/Config');
@@ -270,14 +268,20 @@ const registerUser = async (user, additionalData = {}, req = null) => {
     let newUser;
     if (priorAnonymousUserId) {
       newUser = await updateUser(priorAnonymousUserId, { ...newUserData, role: SystemRoles.USER });
-      await applyPlanChange(
-        { user_id: newUser._id, plan_code: 'free', source: 'system_default' },
-        { getActiveSubscriptionRecord, expireActiveSubscriptions, createSubscription, createQuota },
-      );
     } else {
       newUser = await createUser(newUserData, appConfig.balance, disableTTL, true);
     }
     newUserId = newUser._id;
+    /**
+     * Both branches, not just the anonymous upgrade: a plain registration used to
+     * end here with no subscription and no Balance at all, and the gate reads a
+     * missing Balance as zero rather than as unlimited. Every account that skipped
+     * this would be locked out the moment enforcement came on.
+     */
+    await applyPlanChange(
+      { user_id: newUser._id, plan_code: 'free', source: 'system_default' },
+      buildPlanChangeDeps(db),
+    );
     if (emailEnabled && !newUser.emailVerified) {
       await sendVerificationEmail({
         _id: newUserId,

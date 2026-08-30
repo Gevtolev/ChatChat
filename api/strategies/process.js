@@ -1,8 +1,9 @@
-const { getBalanceConfig } = require('@librechat/api');
 const { FileSources } = require('librechat-data-provider');
 const { getStrategyFunctions } = require('~/server/services/Files/strategies');
 const { resizeAvatar } = require('~/server/services/Files/images/avatar');
+const { getBalanceConfig, applyPlanChange, buildPlanChangeDeps } = require('@librechat/api');
 const { updateUser, createUser, getUserById } = require('~/models');
+const db = require('~/models');
 
 /**
  * Updates the avatar URL and email of an existing user. If the user's avatar URL does not include the query parameter
@@ -99,6 +100,18 @@ const createSocialUser = async ({
 
   const balanceConfig = getBalanceConfig(appConfig);
   const newUserId = await createUser(update, balanceConfig);
+
+  /**
+   * OAuth signup never granted a plan, so every socially-registered account had
+   * no Subscription and no Balance — all six real users in production. The gate
+   * reads a missing Balance as zero, so with Google as the only way in, turning
+   * enforcement on without this would lock out every user there is.
+   */
+  await applyPlanChange(
+    { user_id: newUserId, plan_code: 'free', source: 'system_default' },
+    buildPlanChangeDeps(db),
+  );
+
   const fileStrategy = appConfig?.fileStrategy ?? process.env.CDN_PROVIDER;
   const isLocal = fileStrategy === FileSources.local;
 

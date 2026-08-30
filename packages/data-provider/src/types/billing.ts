@@ -1,5 +1,5 @@
 // packages/data-provider/src/types/billing.ts
-export type PlanCode = 'anonymous' | 'free' | 'trial' | 'pro_m' | 'pro_q' | 'pro_h';
+export type PlanCode = 'anonymous' | 'free' | 'trial' | 'pro_m' | 'pro_q' | 'pro_h' | 'beta';
 export type CostTier = 'cheap' | 'mid' | 'expensive';
 export type SubStatus = 'active' | 'trialing' | 'expired' | 'admin_granted';
 export type PlanChangeSource = 'admin' | 'stripe' | 'system_default' | 'cli';

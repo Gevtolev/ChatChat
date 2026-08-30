@@ -61,6 +61,7 @@ export const PERIOD_DAYS: Record<PlanCode, number> = {
   trial: 7,
   free: 30,
   anonymous: 30,
+  beta: 30,
 };
 
 // ---------------------------------------------------------------------------

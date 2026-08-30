@@ -1,14 +1,9 @@
 const { randomUUID } = require('node:crypto');
 const { logger, getTenantId } = require('@librechat/data-schemas');
 const { SystemRoles } = require('librechat-data-provider');
-const { applyPlanChange } = require('@librechat/api');
-const {
-  createUser,
-  createQuota,
-  createSubscription,
-  expireActiveSubscriptions,
-  getActiveSubscriptionRecord,
-} = require('~/models');
+const { applyPlanChange, buildPlanChangeDeps } = require('@librechat/api');
+const db = require('~/models');
+const { createUser } = require('~/models');
 const { setAuthTokens } = require('~/server/services/AuthService');
 const { getAppConfig } = require('~/server/services/Config');
 
@@ -41,7 +36,7 @@ const anonymousController = async (req, res) => {
 
     await applyPlanChange(
       { user_id: newUser._id, plan_code: 'anonymous', source: 'system_default' },
-      { getActiveSubscriptionRecord, expireActiveSubscriptions, createSubscription, createQuota },
+      buildPlanChangeDeps(db),
     );
 
     const token = await setAuthTokens(newUser._id, res, null, req);

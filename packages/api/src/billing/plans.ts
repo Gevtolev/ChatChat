@@ -57,4 +57,23 @@ export const PLANS: Record<PlanCode, PlanConfig> = {
     lifetime_message_limit: 0,
     features: { agents: true, image_gen: true, voice: true, web_search: true },
   },
+  /**
+   * 内测专用，不对外销售，只能由管理员/CLI 授予。
+   *
+   * 额度刻意高于所有付费档（pro_m 是 11,996,000 = 约 $12）：内测的目的是让人
+   * 放开用并给出反馈，而不是在第三天撞墙。$50 的参照是那个真实重度用户 18 天
+   * 烧掉的 $51 —— 大致相当于一个月的高强度使用。
+   *
+   * `monthly_price_cents: 0` 意味着成本看板会把这些用户算成 100% 亏损。这是
+   * 对的：内测确实没有收入，把它记成别的会污染毛利数据。
+   */
+  beta: {
+    code: 'beta',
+    name: 'Beta Tester',
+    monthly_price_cents: 0,
+    allowed_cost_tiers: ['cheap', 'mid', 'expensive'],
+    monthly_token_credits: 50_000_000,
+    lifetime_message_limit: 0,
+    features: { agents: true, image_gen: true, voice: true, web_search: true },
+  },
 };
