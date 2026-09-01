@@ -1512,7 +1512,6 @@
   "com_ui_queue_send": "Queue message for after the response",
   "com_ui_queued_attachment_count": "{{0}} attachments queued with this message",
   "com_ui_queued_messages": "Queued messages",
-  "com_ui_quotes_queued": "Quotes added for your next message",
   "com_ui_ran_n_agents": "Ran {{0}} agents",
   "com_ui_read_aloud": "Read aloud",
   "com_ui_read_file": "Read {{0}}",

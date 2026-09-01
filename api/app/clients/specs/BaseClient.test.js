@@ -36,8 +36,13 @@ jest.mock('~/models', () => ({
   deleteFiles: jest.fn(),
   getFiles: jest.fn(),
   updateFileUsage: jest.fn(),
-  getActiveSubscriptionRecord: jest.fn().mockResolvedValue({ plan_code: 'pro_m', status: 'active' }),
+  getActiveSubscriptionRecord: jest
+    .fn()
+    .mockResolvedValue({ plan_code: 'pro_m', status: 'active' }),
   incrementQuota: jest.fn().mockResolvedValue({ messages_used: 1 }),
+  /** Must resolve to a positive balance: `checkBillingAccess` throws
+   *  `upgrade_required_quota` on anything <= 0, which fails every send. */
+  refreshMonthlyGrant: jest.fn().mockResolvedValue(1_000_000),
 }));
 
 const { getConvo, getMessages, saveConvo, saveMessage } = require('~/models');

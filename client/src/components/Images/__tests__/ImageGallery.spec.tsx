@@ -21,9 +21,11 @@ jest.mock('~/data-provider', () => ({
   }),
   useGetRole: () => ({ data: null }),
   useGetUserQuery: () => ({ data: null }),
+  useGetStartupConfig: () => ({ data: undefined, isLoading: false }),
   useLoginUserMutation: () => ({ mutate: jest.fn() }),
   useLogoutUserMutation: () => ({ mutate: jest.fn() }),
   useRefreshTokenMutation: () => ({ mutate: jest.fn() }),
+  useAnonymousLoginMutation: () => ({ mutate: jest.fn() }),
 }));
 
 jest.mock('~/hooks', () => ({
@@ -121,9 +123,7 @@ describe('ImageGallery', () => {
   });
 
   it('does not render Load more button when hasNextPage is false', () => {
-    mockGalleryState.pages = [
-      { images: [makeFile()], nextCursor: null },
-    ];
+    mockGalleryState.pages = [{ images: [makeFile()], nextCursor: null }];
     mockGalleryState.hasNextPage = false;
 
     render(<ImageGallery />);
@@ -132,9 +132,7 @@ describe('ImageGallery', () => {
   });
 
   it('renders Load more button when hasNextPage is true', () => {
-    mockGalleryState.pages = [
-      { images: [makeFile()], nextCursor: 'cursor-abc' },
-    ];
+    mockGalleryState.pages = [{ images: [makeFile()], nextCursor: 'cursor-abc' }];
     mockGalleryState.hasNextPage = true;
 
     render(<ImageGallery />);
@@ -143,9 +141,7 @@ describe('ImageGallery', () => {
   });
 
   it('calls fetchNextPage when Load more is clicked', () => {
-    mockGalleryState.pages = [
-      { images: [makeFile()], nextCursor: 'cursor-abc' },
-    ];
+    mockGalleryState.pages = [{ images: [makeFile()], nextCursor: 'cursor-abc' }];
     mockGalleryState.hasNextPage = true;
 
     render(<ImageGallery />);
@@ -155,9 +151,7 @@ describe('ImageGallery', () => {
   });
 
   it('disables Load more while fetching next page', () => {
-    mockGalleryState.pages = [
-      { images: [makeFile()], nextCursor: 'cursor-abc' },
-    ];
+    mockGalleryState.pages = [{ images: [makeFile()], nextCursor: 'cursor-abc' }];
     mockGalleryState.hasNextPage = true;
     mockGalleryState.isFetchingNextPage = true;
 
