@@ -16,6 +16,7 @@ const {
   isEnabled,
   apiNotFound,
   ErrorController,
+  escapeHtmlAttribute,
   performStartupChecks,
   handleJsonParseError,
   initializeFileStorage,
@@ -418,8 +419,8 @@ if (cluster.isMaster) {
       });
 
       const lang = req.cookies.lang || req.headers['accept-language']?.split(',')[0] || 'en-US';
-      const saneLang = lang.replace(/"/g, '&quot;');
-      let updatedIndexHtml = indexHTML.replace(/lang="en-US"/g, `lang="${saneLang}"`);
+      const saneLang = escapeHtmlAttribute(lang);
+      let updatedIndexHtml = indexHTML.replace(/lang="en-US"/g, () => `lang="${saneLang}"`);
 
       res.type('html');
       res.send(updatedIndexHtml);
