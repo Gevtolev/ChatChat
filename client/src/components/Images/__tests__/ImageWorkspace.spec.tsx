@@ -75,9 +75,11 @@ jest.mock('~/data-provider', () => ({
   // Required by AuthContextProvider in layout-test-utils wrapper
   useGetRole: () => ({ data: null }),
   useGetUserQuery: () => ({ data: null }),
+  useGetStartupConfig: () => ({ data: undefined, isLoading: false }),
   useLoginUserMutation: () => ({ mutate: jest.fn() }),
   useLogoutUserMutation: () => ({ mutate: jest.fn() }),
   useRefreshTokenMutation: () => ({ mutate: jest.fn() }),
+  useAnonymousLoginMutation: () => ({ mutate: jest.fn() }),
 }));
 
 jest.mock('@tanstack/react-query', () => ({
