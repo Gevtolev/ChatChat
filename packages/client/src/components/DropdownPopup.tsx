@@ -72,6 +72,7 @@ const Menu: React.FC<MenuProps> = ({
   finalFocus,
   unmountOnHide,
   preserveTabOrder,
+  style,
   ...props
 }) => {
   const menuStore = Ariakit.useMenuStore();
@@ -86,6 +87,11 @@ const Menu: React.FC<MenuProps> = ({
       finalFocus={finalFocus}
       unmountOnHide={unmountOnHide}
       preserveTabOrder={preserveTabOrder}
+      /* Portaled menus land beside modal OGDialog layers, which set
+         `pointer-events: none` on body and re-enable it only on their own
+         content. Without this the menu inherits `none` and its items become
+         hit-transparent (danny-avila/LibreChat#14487). */
+      style={{ pointerEvents: 'auto', ...style }}
       className={cn('popover-ui z-40', className)}
       {...props}
     >
