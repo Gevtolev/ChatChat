@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { Tools } from './types/assistants';
-import type { TMessageContentParts, FunctionTool, FunctionToolCall } from './types/assistants';
+import type { TMessageContentParts, FunctionTool } from './types/assistants';
 import { TFeedback, feedbackSchema } from './feedback';
 import type { SearchResultData } from './types/web';
 import type { TFile } from './types/files';
@@ -335,7 +335,9 @@ export const ImageVisionTool: FunctionTool = {
   },
 };
 
-export const isImageVisionTool = (tool: FunctionTool | FunctionToolCall) =>
+/** Structural on purpose: accepts assistants tools/tool calls and agents function tool
+ *  calls alike — the check only ever reads `type` and `function.name`. */
+export const isImageVisionTool = (tool: { type?: string; function?: { name?: string } }) =>
   tool.type === 'function' && tool.function?.name === ImageVisionTool.function?.name;
 
 export const openAISettings = {

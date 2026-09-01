@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto';
 import { logger } from '@librechat/data-schemas';
 import { Run, Providers, Constants, HookRegistry } from '@librechat/agents';
 import {
@@ -1028,8 +1029,10 @@ export async function createRun({
     }
   }
 
+  const resolvedRunId = runId ?? randomUUID();
+
   return Run.create({
-    runId,
+    runId: resolvedRunId,
     graphConfig,
     tokenCounter,
     customHandlers,
