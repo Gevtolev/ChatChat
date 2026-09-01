@@ -12,6 +12,7 @@ type ShutdownTask = {
 const tasks: ShutdownTask[] = [];
 let isShuttingDown = false;
 let httpServer: Server | null = null;
+let forceExitTimer: NodeJS.Timeout | null = null;
 
 /**
  * Register a cleanup task to run after the HTTP server has closed.
@@ -51,6 +52,18 @@ export function __resetShutdownStateForTests(): void {
   tasks.length = 0;
   isShuttingDown = false;
   httpServer = null;
+  /** A drain that never settles leaves this armed. It is `unref`'d, so it does
+   *  not hold the process open — but it does fire if anything else keeps the
+   *  process alive past the timeout, exiting a suite that had long since moved
+   *  on with code 1 and no attributable failure. */
+  clearForceExitTimer();
+}
+
+function clearForceExitTimer(): void {
+  if (forceExitTimer) {
+    clearTimeout(forceExitTimer);
+    forceExitTimer = null;
+  }
 }
 
 async function shutdown(signal: NodeJS.Signals): Promise<void> {
@@ -60,31 +73,40 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
   isShuttingDown = true;
   logger.info(`Received ${signal}, draining HTTP server...`);
 
+  /** Owned locally so a late `finally` from a superseded drain cannot clear the
+   *  safety net belonging to a shutdown that started after it. */
   const forceExit = setTimeout(() => {
     logger.warn(`Graceful shutdown exceeded ${SHUTDOWN_TIMEOUT_MS}ms, forcing exit`);
     process.exit(1);
   }, SHUTDOWN_TIMEOUT_MS);
   forceExit.unref();
+  forceExitTimer = forceExit;
 
   let exitCode = 0;
 
   try {
-    await closeHttpServer();
-  } catch (err) {
-    logger.error('Error closing HTTP server during graceful shutdown:', err);
-    exitCode = 1;
-  }
-
-  for (const task of tasks) {
     try {
-      logger.info(`Running shutdown task: ${task.name}`);
-      await task.fn();
+      await closeHttpServer();
     } catch (err) {
-      logger.error(`Shutdown task "${task.name}" failed:`, err);
+      logger.error('Error closing HTTP server during graceful shutdown:', err);
+      exitCode = 1;
+    }
+
+    for (const task of tasks) {
+      try {
+        logger.info(`Running shutdown task: ${task.name}`);
+        await task.fn();
+      } catch (err) {
+        logger.error(`Shutdown task "${task.name}" failed:`, err);
+      }
+    }
+  } finally {
+    clearTimeout(forceExit);
+    if (forceExitTimer === forceExit) {
+      forceExitTimer = null;
     }
   }
 
-  clearTimeout(forceExit);
   logger.info('Graceful shutdown complete, exiting');
   process.exit(exitCode);
 }
