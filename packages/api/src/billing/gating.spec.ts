@@ -110,6 +110,40 @@ describe('checkBillingAccess — model tier gating', () => {
     ).resolves.toBeUndefined();
   });
 
+  /** A row whose `plan_code` is no longer in `PLANS` — what retiring a plan
+   *  leaves behind, since the schema enum only constrains writes. This used to
+   *  dereference `undefined` and 500 every message that user sent. */
+  test('retired plan_code falls back to free rather than throwing', async () => {
+    /** Four, not two: `expectDenied` asserts both the rejection and its code. */
+    expect.assertions(4);
+    const userId = new mongoose.Types.ObjectId();
+    const deps = {
+      ...gatingDeps(),
+      getActiveSubscriptionRecord: async () => ({
+        user_id: userId,
+        plan_code: 'pro_q',
+        status: 'active',
+      }),
+    } as unknown as Parameters<typeof checkBillingAccess>[1];
+
+    /** Both calls are refused, and the point is *which* refusal: each one is a
+     *  distinct check reached in order, which only happens if a real plan was
+     *  resolved. An expensive model stops at the tier gate — free allows cheap
+     *  only... */
+    await expectDenied(
+      checkBillingAccess({ userId, modelId: 'claude-opus-5' }, deps),
+      'upgrade_required_model',
+    );
+    /** ...while a cheap one clears that gate and stops at the quota instead,
+     *  this account having no Balance row. Before the fallback both threw a
+     *  TypeError on `plan.code`, indistinguishable from each other and from a
+     *  genuine outage. */
+    await expectDenied(
+      checkBillingAccess({ userId, modelId: 'gpt-5.4-nano' }, deps),
+      'upgrade_required_quota',
+    );
+  });
+
   test('unknown model treated as mid tier → free user denied (mid not in cheap)', async () => {
     expect.assertions(2);
     const userId = new mongoose.Types.ObjectId();
