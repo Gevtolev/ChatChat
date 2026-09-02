@@ -47,16 +47,16 @@ beforeEach(async () => {
 });
 
 describe('applyPlanChange', () => {
-  test('grant pro_m: creates active subscription + zeroed quota; previous_plan is null first time', async () => {
+  test('grant plus: creates active subscription + zeroed quota; previous_plan is null first time', async () => {
     const userId = new mongoose.Types.ObjectId();
 
     const result = await applyPlanChange(
-      { user_id: userId, plan_code: 'pro_m', source: 'admin' },
+      { user_id: userId, plan_code: 'plus', source: 'admin' },
       deps,
     );
 
     expect(result.previous_plan).toBeNull();
-    expect(result.subscription.plan_code).toBe('pro_m');
+    expect(result.subscription.plan_code).toBe('plus');
     expect(result.subscription.status).toBe('admin_granted');
     expect(result.quota.messages_used).toBe(0);
     expect(result.quota.period_start.getTime()).toBe(
@@ -64,10 +64,10 @@ describe('applyPlanChange', () => {
     );
   });
 
-  test('second grant (trial) expires first sub; exactly one active remains; previous_plan=pro_m', async () => {
+  test('second grant (trial) expires first sub; exactly one active remains; previous_plan=plus', async () => {
     const userId = new mongoose.Types.ObjectId();
 
-    await applyPlanChange({ user_id: userId, plan_code: 'pro_m', source: 'admin' }, deps);
+    await applyPlanChange({ user_id: userId, plan_code: 'plus', source: 'admin' }, deps);
     const Subscription = mongoose.models.Subscription;
 
     const countAfterFirst = await Subscription.countDocuments({
@@ -81,7 +81,7 @@ describe('applyPlanChange', () => {
       deps,
     );
 
-    expect(result2.previous_plan).toBe('pro_m');
+    expect(result2.previous_plan).toBe('plus');
     expect(result2.subscription.plan_code).toBe('trial');
 
     const activeCount = await Subscription.countDocuments({
@@ -96,12 +96,12 @@ describe('applyPlanChange', () => {
 
   test('period_end is now + correct period_days per plan_code', async () => {
     const cases: Array<{
-      plan_code: 'pro_m' | 'pro_q' | 'pro_h' | 'trial' | 'free';
+      plan_code: 'plus' | 'pro' | 'max' | 'trial' | 'free';
       days: number;
     }> = [
-      { plan_code: 'pro_m', days: 30 },
-      { plan_code: 'pro_q', days: 90 },
-      { plan_code: 'pro_h', days: 180 },
+      { plan_code: 'plus', days: 30 },
+      { plan_code: 'pro', days: 30 },
+      { plan_code: 'max', days: 30 },
       { plan_code: 'trial', days: 7 },
       { plan_code: 'free', days: 30 },
     ];
@@ -126,7 +126,7 @@ describe('applyPlanChange', () => {
   test('custom period_days overrides plan default', async () => {
     const userId = new mongoose.Types.ObjectId();
     const result = await applyPlanChange(
-      { user_id: userId, plan_code: 'pro_m', source: 'admin', period_days: 45 },
+      { user_id: userId, plan_code: 'plus', source: 'admin', period_days: 45 },
       deps,
     );
 
@@ -142,10 +142,10 @@ describe('applyPlanChange', () => {
 describe('getActiveSubscription', () => {
   test('returns the active subscription when one exists', async () => {
     const userId = new mongoose.Types.ObjectId();
-    await applyPlanChange({ user_id: userId, plan_code: 'pro_m', source: 'admin' }, deps);
+    await applyPlanChange({ user_id: userId, plan_code: 'plus', source: 'admin' }, deps);
 
     const sub = await getActiveSubscription(userId, deps);
-    expect(sub.plan_code).toBe('pro_m');
+    expect(sub.plan_code).toBe('plus');
     expect('_id' in sub).toBe(true);
   });
 
@@ -160,7 +160,7 @@ describe('getActiveSubscription', () => {
 
   test('after expiring the only sub, returns system default free', async () => {
     const userId = new mongoose.Types.ObjectId();
-    await applyPlanChange({ user_id: userId, plan_code: 'pro_m', source: 'admin' }, deps);
+    await applyPlanChange({ user_id: userId, plan_code: 'plus', source: 'admin' }, deps);
     await deps.expireActiveSubscriptions(userId);
 
     const sub = await getActiveSubscription(userId, deps);

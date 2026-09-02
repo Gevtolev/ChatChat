@@ -101,7 +101,7 @@ describe('checkBillingAccess — model tier gating', () => {
   test('pro user (granted via applyPlanChange) + expensive model → passes', async () => {
     const userId = new mongoose.Types.ObjectId();
     await applyPlanChange(
-      { user_id: userId, plan_code: 'pro_m', source: 'admin' },
+      { user_id: userId, plan_code: 'plus', source: 'admin' },
       buildApplyDeps(),
     );
 
@@ -184,10 +184,7 @@ describe('checkBillingAccess — feature gating', () => {
     // gpt-5.4-nano is cheap (passes tier check), but agents=false on free plan
 
     await expectDenied(
-      checkBillingAccess(
-        { userId, modelId: 'gpt-5.4-nano', featureFlag: 'agents' },
-        gatingDeps(),
-      ),
+      checkBillingAccess({ userId, modelId: 'gpt-5.4-nano', featureFlag: 'agents' }, gatingDeps()),
       'feature_not_available',
     );
   });
@@ -195,15 +192,12 @@ describe('checkBillingAccess — feature gating', () => {
   test('featureFlag set + pro plan → passes feature check and quota increment', async () => {
     const userId = new mongoose.Types.ObjectId();
     await applyPlanChange(
-      { user_id: userId, plan_code: 'pro_m', source: 'admin' },
+      { user_id: userId, plan_code: 'plus', source: 'admin' },
       buildApplyDeps(),
     );
 
     await expect(
-      checkBillingAccess(
-        { userId, modelId: 'gpt-5.4-mini', featureFlag: 'agents' },
-        gatingDeps(),
-      ),
+      checkBillingAccess({ userId, modelId: 'gpt-5.4-mini', featureFlag: 'agents' }, gatingDeps()),
     ).resolves.toBeUndefined();
   });
 });
@@ -306,7 +300,7 @@ describe('checkBillingAccess — balance-driven quota', () => {
     expect.assertions(3);
     const userId = new mongoose.Types.ObjectId();
     await applyPlanChange(
-      { user_id: userId, plan_code: 'pro_m', source: 'admin' },
+      { user_id: userId, plan_code: 'plus', source: 'admin' },
       buildApplyDeps(),
     );
     const deps = gatingDeps();
@@ -326,23 +320,23 @@ describe('checkBillingAccess — balance-driven quota', () => {
   test("a plan change grants that plan's monthly credits", async () => {
     const userId = new mongoose.Types.ObjectId();
     await applyPlanChange(
-      { user_id: userId, plan_code: 'pro_m', source: 'admin' },
+      { user_id: userId, plan_code: 'plus', source: 'admin' },
       buildApplyDeps(),
     );
 
     const balance = await mongoose.models.Balance.findOne({ user: userId }).lean<BalanceDoc>();
-    expect(balance?.tokenCredits).toBe(PLANS.pro_m.monthly_token_credits);
+    expect(balance?.tokenCredits).toBe(PLANS.plus.monthly_token_credits);
     /** Monthly reset is Balance's own auto-refill, not a quota period. */
     expect(balance?.autoRefillEnabled).toBe(true);
     expect(balance?.refillIntervalUnit).toBe('months');
     expect(balance?.refillIntervalValue).toBe(1);
-    expect(balance?.refillAmount).toBe(PLANS.pro_m.monthly_token_credits);
+    expect(balance?.refillAmount).toBe(PLANS.plus.monthly_token_credits);
   });
 
   test('the gate does not itself consume credits', async () => {
     const userId = new mongoose.Types.ObjectId();
     await applyPlanChange(
-      { user_id: userId, plan_code: 'pro_m', source: 'admin' },
+      { user_id: userId, plan_code: 'plus', source: 'admin' },
       buildApplyDeps(),
     );
     const deps = gatingDeps();
@@ -366,12 +360,17 @@ describe('checkBillingAccess — monthly grant renewal', () => {
   }
 
   async function balanceOf(userId: mongoose.Types.ObjectId): Promise<BalanceDoc> {
-    return (await mongoose.models.Balance.findOne({ user: userId }).lean()) as unknown as BalanceDoc;
+    return (await mongoose.models.Balance.findOne({
+      user: userId,
+    }).lean()) as unknown as BalanceDoc;
   }
 
   test('a spent balance is restored once a month has passed', async () => {
     const userId = new mongoose.Types.ObjectId();
-    await applyPlanChange({ user_id: userId, plan_code: 'pro_m', source: 'admin' }, buildApplyDeps());
+    await applyPlanChange(
+      { user_id: userId, plan_code: 'plus', source: 'admin' },
+      buildApplyDeps(),
+    );
 
     await mongoose.models.Balance.updateOne({ user: userId }, { $set: { tokenCredits: 0 } });
     await backdateLastRefill(userId, 2);
@@ -380,13 +379,16 @@ describe('checkBillingAccess — monthly grant renewal', () => {
       checkBillingAccess({ userId, modelId: 'gpt-5.5' }, gatingDeps()),
     ).resolves.toBeUndefined();
 
-    expect((await balanceOf(userId)).tokenCredits).toBe(PLANS.pro_m.monthly_token_credits);
+    expect((await balanceOf(userId)).tokenCredits).toBe(PLANS.plus.monthly_token_credits);
   });
 
   test('a spent balance stays spent inside the same month', async () => {
     expect.assertions(3);
     const userId = new mongoose.Types.ObjectId();
-    await applyPlanChange({ user_id: userId, plan_code: 'pro_m', source: 'admin' }, buildApplyDeps());
+    await applyPlanChange(
+      { user_id: userId, plan_code: 'plus', source: 'admin' },
+      buildApplyDeps(),
+    );
 
     await mongoose.models.Balance.updateOne({ user: userId }, { $set: { tokenCredits: 0 } });
 
@@ -401,18 +403,24 @@ describe('checkBillingAccess — monthly grant renewal', () => {
    *  untouched month must not stack on top of the next one. */
   test('renewal sets the grant rather than adding to it', async () => {
     const userId = new mongoose.Types.ObjectId();
-    await applyPlanChange({ user_id: userId, plan_code: 'pro_m', source: 'admin' }, buildApplyDeps());
+    await applyPlanChange(
+      { user_id: userId, plan_code: 'plus', source: 'admin' },
+      buildApplyDeps(),
+    );
     await backdateLastRefill(userId, 2);
 
     await checkBillingAccess({ userId, modelId: 'gpt-5.5' }, gatingDeps());
 
-    expect((await balanceOf(userId)).tokenCredits).toBe(PLANS.pro_m.monthly_token_credits);
+    expect((await balanceOf(userId)).tokenCredits).toBe(PLANS.plus.monthly_token_credits);
   });
 
   /** Two requests arriving together must not each hand out a grant. */
   test('concurrent checks renew exactly once', async () => {
     const userId = new mongoose.Types.ObjectId();
-    await applyPlanChange({ user_id: userId, plan_code: 'pro_m', source: 'admin' }, buildApplyDeps());
+    await applyPlanChange(
+      { user_id: userId, plan_code: 'plus', source: 'admin' },
+      buildApplyDeps(),
+    );
     await mongoose.models.Balance.updateOne({ user: userId }, { $set: { tokenCredits: 5 } });
     await backdateLastRefill(userId, 2);
 
@@ -423,12 +431,15 @@ describe('checkBillingAccess — monthly grant renewal', () => {
       checkBillingAccess({ userId, modelId: 'gpt-5.5' }, deps),
     ]);
 
-    expect((await balanceOf(userId)).tokenCredits).toBe(PLANS.pro_m.monthly_token_credits);
+    expect((await balanceOf(userId)).tokenCredits).toBe(PLANS.plus.monthly_token_credits);
   });
 
   test('renewal reuses the interval grantMonthlyCredits armed', async () => {
     const userId = new mongoose.Types.ObjectId();
-    await applyPlanChange({ user_id: userId, plan_code: 'beta', source: 'admin' }, buildApplyDeps());
+    await applyPlanChange(
+      { user_id: userId, plan_code: 'beta', source: 'admin' },
+      buildApplyDeps(),
+    );
 
     const record = await balanceOf(userId);
     expect(record.autoRefillEnabled).toBe(true);
