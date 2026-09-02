@@ -36,6 +36,21 @@ require('./helpers');
 const OPENROUTER_MODELS_URL = 'https://openrouter.ai/api/v1/models';
 
 /**
+ * gptsapi's published rate card. Public — no key, unlike their `/v1/models`,
+ * which needs one and carries no prices at all.
+ *
+ * This is the only price source for the models we route through them. Claude,
+ * GPT and Gemini cannot go through OpenRouter (403, provider ToS, from a US
+ * egress as well as a Chinese one), so before this existed a third of the
+ * lineup was reported `unverifiable` and drifted unnoticed: `gpt-5.6-sol` was
+ * billed at half its real rate and `claude-sonnet-4-6-cc` at 167% of it.
+ *
+ * Keys are the ids we send, so no translation table is needed — unlike
+ * `OPENROUTER_IDS` below.
+ */
+const GPTSAPI_PRICES_URL = 'https://api2.gptsapi.net/user/model_price';
+
+/**
  * Keys for reading each provider's model list, by host. OpenRouter's list is
  * public; gptsapi's returns 401 without one.
  *
@@ -69,6 +84,9 @@ const OPENROUTER_IDS = {
   'x-ai/grok-4.20': 'x-ai/grok-4.20',
   'x-ai/grok-4.20-multi-agent': 'x-ai/grok-4.20-multi-agent',
   'x-ai/grok-4.5': 'x-ai/grok-4.5',
+  'x-ai/grok-4.6': 'x-ai/grok-4.6',
+  'z-ai/glm-5.3': 'z-ai/glm-5.3',
+  'moonshotai/kimi-k3': 'moonshotai/kimi-k3',
   'z-ai/glm-5.2': 'z-ai/glm-5.2',
   'z-ai/glm-5-turbo': 'z-ai/glm-5-turbo',
   'moonshotai/kimi-k2.6': 'moonshotai/kimi-k2.6',
@@ -182,6 +200,82 @@ function modelBases(config) {
  * Seven of our models had already disappeared from gptsapi before this check
  * existed.
  */
+/**
+ * gptsapi's rate card as `id -> { prompt, completion }`, or null when it cannot
+ * be read.
+ *
+ * Only per-token rows are kept. The same list prices TTS by the minute, images
+ * per render and one entry as the literal string `按分辨率` ("by resolution"),
+ * and a per-render price silently read as per-million would be nonsense.
+ */
+async function gptsapiPrices() {
+  const perMillionRate = (text) => {
+    const match = /\$([\d.]+)\s*\/\s*1M/.exec(text ?? '');
+    return match ? Number(match[1]) : null;
+  };
+  try {
+    const response = await fetch(GPTSAPI_PRICES_URL);
+    if (!response.ok) {
+      return null;
+    }
+    const body = await response.json();
+    const prices = new Map();
+    for (const group of body?.data ?? []) {
+      for (const model of group?.modelList ?? []) {
+        const prompt = perMillionRate(model.inputUnitPrice);
+        const completion = perMillionRate(model.outputUnitPrice);
+        if (prompt != null && completion != null) {
+          prices.set(model.modelValue.toLowerCase(), { prompt, completion });
+        }
+      }
+    }
+    return prices;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Per-provider price range for one OpenRouter model, or null when unreadable.
+ *
+ * A multi-provider model has no single price. `/models` quotes whichever
+ * provider is default at that moment, so a rate that has not moved reads as
+ * drift the instant routing shifts — `deepseek-v4-pro` spans 0.87 to 1.91
+ * across 18 providers, a 2.2x band. Comparing against the band instead of the
+ * quote is what separates a real list-price change (the whole band moves) from
+ * routing noise (only the quote does).
+ */
+async function openRouterSpread(modelId) {
+  try {
+    const response = await fetch(`${OPENROUTER_MODELS_URL}/${modelId}/endpoints`);
+    if (!response.ok) {
+      return null;
+    }
+    const endpoints = (await response.json())?.data?.endpoints ?? [];
+    const prompts = endpoints.map((e) => perMillion(e.pricing.prompt)).filter((v) => v != null);
+    const completions = endpoints
+      .map((e) => perMillion(e.pricing.completion))
+      .filter((v) => v != null);
+    if (!prompts.length || !completions.length) {
+      return null;
+    }
+    return {
+      prompt: { min: Math.min(...prompts), max: Math.max(...prompts) },
+      completion: { min: Math.min(...completions), max: Math.max(...completions) },
+      providers: endpoints.length,
+    };
+  } catch {
+    return null;
+  }
+}
+
+const within = (value, range) =>
+  value >= range.min - DRIFT_TOLERANCE && value <= range.max + DRIFT_TOLERANCE;
+
+/** Trims the float noise that surfaces from multiplying published per-token
+ *  fractions by 1e6 — a band edge otherwise prints as 3.8299999999999996. */
+const band = (range) => `${Number(range.min.toFixed(6))}–${Number(range.max.toFixed(6))}`;
+
 async function providerCatalogue(base, apiKey) {
   const headers = apiKey ? { Authorization: `Bearer ${apiKey}` } : undefined;
   try {
@@ -208,6 +302,11 @@ async function providerCatalogue(base, apiKey) {
   }
   const { data } = await response.json();
   const catalogue = new Map(data.map((model) => [model.id, model]));
+
+  const gptsapiCard = await gptsapiPrices();
+  if (gptsapiCard === null) {
+    console.orange('  api.gptsapi.net: rate card unreadable — its models fall back to unverified');
+  }
 
   const config = loadConfig();
   const models = productionModels(config);
@@ -252,31 +351,80 @@ async function providerCatalogue(base, apiKey) {
       continue;
     }
 
-    const openRouterId = OPENROUTER_IDS[model];
-    if (!openRouterId) {
-      console.orange(`  ${model}: not mapped to an OpenRouter id — price unverified`);
-      problems.unverifiable++;
-      continue;
+    /** gptsapi's own card wins for anything not routed through OpenRouter.
+     *  OpenRouter would otherwise price it from a different vendor's list — and
+     *  for Claude, GPT and Gemini it prices a model we are not permitted to
+     *  call at all.
+     *
+     *  The test is "not OpenRouter" rather than "is gptsapi" because only the
+     *  OpenRouter half is declared under `endpoints.custom`. Our GPT and Claude
+     *  models sit on the built-in `openAI` and `anthropic` endpoints, pointed at
+     *  gptsapi by `OPENAI_REVERSE_PROXY` / `ANTHROPIC_REVERSE_PROXY`, so
+     *  `modelBases` has no entry for them at all. Keys are full model ids, so a
+     *  model absent from the card simply falls through. */
+    const gptsapiRate =
+      base && new URL(base).host === 'openrouter.ai'
+        ? undefined
+        : gptsapiCard?.get(model.toLowerCase());
+
+    let livePrompt;
+    let liveCompletion;
+    /** gptsapi publishes cache rates on its pricing page but not in this feed,
+     *  so cache stays unchecked on that route. Harmless today: their endpoint
+     *  drops `cache_control` blocks and always reports `cached_tokens: 0`, so
+     *  no cached read is ever billed. */
+    let liveCacheRead = null;
+
+    if (gptsapiRate) {
+      livePrompt = gptsapiRate.prompt;
+      liveCompletion = gptsapiRate.completion;
+    } else {
+      const openRouterId = OPENROUTER_IDS[model];
+      if (!openRouterId) {
+        console.orange(`  ${model}: not mapped to an OpenRouter id — price unverified`);
+        problems.unverifiable++;
+        continue;
+      }
+
+      const live = catalogue.get(openRouterId);
+      if (!live) {
+        console.orange(`  ${model}: '${openRouterId}' absent from OpenRouter catalogue`);
+        problems.unverifiable++;
+        continue;
+      }
+
+      livePrompt = perMillion(live.pricing.prompt);
+      liveCompletion = perMillion(live.pricing.completion);
+      liveCacheRead = perMillion(live.pricing.input_cache_read);
     }
 
-    const live = catalogue.get(openRouterId);
-    if (!live) {
-      console.orange(`  ${model}: '${openRouterId}' absent from OpenRouter catalogue`);
-      problems.unverifiable++;
-      continue;
-    }
-
-    const livePrompt = perMillion(live.pricing.prompt);
-    const liveCompletion = perMillion(live.pricing.completion);
     if (drifted(rate.prompt, livePrompt) || drifted(rate.completion, liveCompletion)) {
+      /** Only OpenRouter fans a model across providers; a gptsapi rate is a
+       *  single published number, so a difference there is always real. */
+      const spread = gptsapiRate ? null : await openRouterSpread(OPENROUTER_IDS[model]);
+      if (
+        spread &&
+        within(rate.prompt, spread.prompt) &&
+        within(rate.completion, spread.completion)
+      ) {
+        console.orange(
+          `  ${model}: quote moved to ${livePrompt}/${liveCompletion}, but ${rate.prompt}/${rate.completion} ` +
+            `sits inside the ${spread.providers}-provider band ` +
+            `(${band(spread.prompt)} / ${band(spread.completion)}) — routing, not a price change`,
+        );
+        continue;
+      }
       console.red(
-        `  ${model}: billing ${rate.prompt}/${rate.completion}, live ${livePrompt}/${liveCompletion}`,
+        `  ${model}: billing ${rate.prompt}/${rate.completion}, live ${livePrompt}/${liveCompletion}` +
+          (spread
+            ? ` — outside the ${spread.providers}-provider band ` +
+              `(${band(spread.prompt)} / ${band(spread.completion)})`
+            : ''),
       );
       problems.drift++;
       continue;
     }
 
-    const liveCacheRead = perMillion(live.pricing.input_cache_read);
     const cache = key ? cacheTokenValues[key] : null;
     if (liveCacheRead != null && !cache && !chatchatNoCacheModels.includes(model)) {
       console.red(
