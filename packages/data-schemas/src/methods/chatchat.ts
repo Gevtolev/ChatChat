@@ -54,8 +54,23 @@ export const chatchatValues: Record<string, TokenRate> = {
    *
    *  `claude-opus-5` and `claude-sonnet-5` are deliberately absent: upstream
    *  already prices both correctly, base and cache, so an override here would
-   *  be pure duplication and one more thing to keep in sync. */
-  'gpt-5.6-sol': { prompt: 2.5, completion: 15 },
+   *  be pure duplication and one more thing to keep in sync. The `-cc` variants
+   *  are the exception — see `claude-sonnet-4-6-cc` below. */
+
+  /** gptsapi discounts its `-cc` variants below the vendor's list price (here
+   *  3/15 -> 1.8/9), and nothing upstream models that: `claude-sonnet-4-6-cc`
+   *  falls back to `claude-sonnet-4-6` by longest match and bills list, so we
+   *  were charging users 67% over cost. This key is 20 characters against that
+   *  fallback's 17, so it wins the match outright. */
+  'claude-sonnet-4-6-cc': { prompt: 1.8, completion: 9 },
+
+  /** Was 2.5/15 — exactly half, so every call was subsidised. gptsapi bills it
+   *  at OpenAI list (5/30, confirmed against their price API 2026-09-02); the
+   *  old figure matches `gpt-5.4`'s rate, but nothing resolves `gpt-5.6-sol` to
+   *  that key, so where it came from is unknown. `check-model-prices` reported
+   *  the model as unverifiable rather than wrong, because it could only price
+   *  against OpenRouter and this model is not in that catalogue. */
+  'gpt-5.6-sol': { prompt: 5, completion: 30 },
   'gpt-5.6-terra': { prompt: 2, completion: 12 },
   'gpt-5.6-luna': { prompt: 0.2, completion: 1.2 },
   'gemini-3.7-flash': { prompt: 0.375, completion: 1.875 },
@@ -127,8 +142,24 @@ export const chatchatValues: Record<string, TokenRate> = {
  * correct upstream values, so overriding them would add drift for no gain.
  */
 export const chatchatCacheValues: Record<string, CacheRate> = {
-  /** Current generation, matching the base rates above. */
-  'gpt-5.6-sol': { write: 2.5, read: 0.25 },
+  /** Anthropic's 1.25x write multiplier on the discounted 1.8 input, and the
+   *  usual 0.1x read — both confirmed on gptsapi's own model panel (2.25 /
+   *  0.18) rather than derived, since the discount could have applied to the
+   *  base rate alone. */
+  'claude-sonnet-4-6-cc': { write: 2.25, read: 0.18 },
+
+  /** Current generation, matching the base rates above.
+   *
+   *  Follows from the corrected 5.0 input, not from a checked figure: gptsapi
+   *  publishes cache rates on its pricing page but not in its price API, and
+   *  the page is self-inconsistent here — `gpt-5.5`, identical to this model at
+   *  5/30, shows a 0.50 write where this one shows 6.25. Both readings cannot
+   *  follow one rule, and neither is machine-checkable, so this keeps the
+   *  convention documented above (implicit-cache vendors write at their input
+   *  rate) rather than trusting one scrape over the other. Inert either way:
+   *  gptsapi drops `cache_control` blocks and always reports
+   *  `cached_tokens: 0`, so nothing on this route ever bills a cached read. */
+  'gpt-5.6-sol': { write: 5, read: 0.5 },
   'gpt-5.6-terra': { write: 2, read: 0.2 },
   'gpt-5.6-luna': { write: 0.2, read: 0.02 },
   'gemini-3.7-flash': { write: 0.375, read: 0.0375 },
