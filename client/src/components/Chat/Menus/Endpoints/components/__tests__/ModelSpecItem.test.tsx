@@ -7,10 +7,14 @@ const mockToggleFavoriteSpec = jest.fn();
 let mockIsFavoriteSpec = false;
 let mockIsActive = false;
 
+/** Mutable so a test can lock a spec without re-mocking the context. */
+const mockLockedSpecs = new Set<string>();
+
 jest.mock('~/components/Chat/Menus/Endpoints/ModelSelectorContext', () => ({
   useModelSelectorContext: () => ({
     handleSelectSpec: mockHandleSelectSpec,
     endpointsConfig: {},
+    lockedSpecs: mockLockedSpecs,
   }),
 }));
 
@@ -54,6 +58,7 @@ describe('ModelSpecItem', () => {
     jest.clearAllMocks();
     mockIsFavoriteSpec = false;
     mockIsActive = false;
+    mockLockedSpecs.clear();
   });
 
   it('renders the spec label and icon', () => {
@@ -83,6 +88,35 @@ describe('ModelSpecItem', () => {
     render(<ModelSpecItem spec={baseSpec} isSelected={false} />);
     fireEvent.click(screen.getByRole('menuitem'));
     expect(mockHandleSelectSpec).toHaveBeenCalledWith(baseSpec);
+  });
+
+  /** The whole point of the change: a plan the user does not have used to be
+   *  discoverable only by picking the model, sending, and being refused. */
+  describe('when the spec is locked by the plan', () => {
+    beforeEach(() => {
+      mockLockedSpecs.add(baseSpec.name);
+    });
+
+    it('does not select it on click', () => {
+      render(<ModelSpecItem spec={baseSpec} isSelected={false} />);
+      fireEvent.click(screen.getByRole('menuitem'));
+      expect(mockHandleSelectSpec).not.toHaveBeenCalled();
+    });
+
+    it('marks it disabled for assistive technology', () => {
+      render(<ModelSpecItem spec={baseSpec} isSelected={false} />);
+      expect(screen.getByRole('menuitem')).toHaveAttribute('aria-disabled', 'true');
+    });
+
+    /** In the row, not only in a hover tooltip — a keyboard or touch user never
+     *  sees the latter. */
+    it('states why, in place of the description', () => {
+      render(<ModelSpecItem spec={baseSpec} isSelected={false} />);
+      expect(screen.getByText('com_ui_model_locked_upgrade')).toBeInTheDocument();
+      if (baseSpec.description) {
+        expect(screen.queryByText(baseSpec.description)).not.toBeInTheDocument();
+      }
+    });
   });
 
   describe('pin button', () => {

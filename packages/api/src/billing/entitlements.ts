@@ -1,7 +1,7 @@
 import { logger } from '@librechat/data-schemas';
 import { CREDIT_DISPLAY_DIVISOR } from 'librechat-data-provider';
-import type { CostTier, PlanCode } from 'librechat-data-provider';
 import type { ISubscriptionLean } from '@librechat/data-schemas';
+import type { TEntitlements } from 'librechat-data-provider';
 import type { Types } from 'mongoose';
 import { getActiveSubscription } from './applyPlanChange';
 import { PLANS } from './plans';
@@ -11,23 +11,11 @@ export interface EntitlementsDeps {
   findBalanceByUser: (userId: string) => Promise<{ tokenCredits?: number } | null>;
 }
 
-export interface Entitlements {
-  plan: {
-    code: PlanCode;
-    name: string;
-    allowedCostTiers: CostTier[];
-    features: (typeof PLANS)[PlanCode]['features'];
-  };
-  /** Null for plans that grant no credits — the anonymous tier, whose limit is
-   *  a message count rather than an allowance. A zero would read as "spent". */
-  credits: {
-    remaining: number;
-    granted: number;
-    /** Sent rather than hard-coded in the client so the two cannot drift. */
-    displayDivisor: number;
-  } | null;
-  periodEnd: string | null;
-}
+/** The wire contract lives in `librechat-data-provider` because the client is
+ *  the reason it exists; re-exported so backend callers need not know that.
+ *  `lockedModelSpecs` is filled by the API layer, which knows which models the
+ *  deployment offers — that is app config, not billing. */
+export type { TEntitlements };
 
 /**
  * What the signed-in user is allowed to do and how much of their allowance is
@@ -49,7 +37,7 @@ export interface Entitlements {
 export async function getEntitlements(
   userId: Types.ObjectId,
   deps: EntitlementsDeps,
-): Promise<Entitlements> {
+): Promise<TEntitlements> {
   const sub = await getActiveSubscription(userId, deps);
   const plan = PLANS[sub.plan_code] ?? PLANS.free;
   if (PLANS[sub.plan_code] === undefined) {
@@ -59,7 +47,7 @@ export async function getEntitlements(
   }
 
   const granted = plan.monthly_token_credits;
-  let credits: Entitlements['credits'] = null;
+  let credits: TEntitlements['credits'] = null;
 
   if (granted > 0) {
     const balance = await deps.findBalanceByUser(String(userId));

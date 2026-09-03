@@ -16,7 +16,7 @@ import {
   useLocalize,
 } from '~/hooks';
 import { useAgentsMapContext, useAssistantsMapContext, useLiveAnnouncer } from '~/Providers';
-import { useGetEndpointsQuery, useListAgentsQuery } from '~/data-provider';
+import { useGetEndpointsQuery, useListAgentsQuery, useGetEntitlements } from '~/data-provider';
 import { useAuthContext } from '~/hooks';
 import { useModelSelectorChatContext } from './ModelSelectorChatContext';
 import useSelectMention from '~/hooks/Input/useSelectMention';
@@ -34,6 +34,10 @@ type ModelSelectorContextType = {
   agentsMap: t.TAgentsMap | undefined;
   assistantsMap: t.TAssistantsMap | undefined;
   endpointsConfig: t.TEndpointsConfig;
+  /** Spec names the caller's plan cannot reach. Empty while entitlements are
+   *  loading or unavailable, so a slow response never hides a model the user
+   *  is entitled to. */
+  lockedSpecs: Set<string>;
 
   // Functions
   endpointRequiresUserKey: (endpoint: string) => boolean;
@@ -117,6 +121,14 @@ export function ModelSelectorProvider({ children, startupConfig }: ModelSelector
       return model;
     },
     [agentsMap],
+  );
+
+  const { data: entitlements } = useGetEntitlements();
+  /** A Set rather than the array: every rendered item asks about itself, and
+   *  `includes` on each would be quadratic across a long model list. */
+  const lockedSpecs = useMemo(
+    () => new Set<string>(entitlements?.lockedModelSpecs ?? []),
+    [entitlements?.lockedModelSpecs],
   );
 
   const { onSelectEndpoint, onSelectSpec } = useSelectMention({
@@ -259,6 +271,7 @@ export function ModelSelectorProvider({ children, startupConfig }: ModelSelector
       assistantsMap,
       mappedEndpoints,
       endpointsConfig,
+      lockedSpecs,
       handleSelectSpec,
       handleSelectModel,
       setSelectedValues,
@@ -278,6 +291,7 @@ export function ModelSelectorProvider({ children, startupConfig }: ModelSelector
       assistantsMap,
       mappedEndpoints,
       endpointsConfig,
+      lockedSpecs,
       handleSelectSpec,
       handleSelectModel,
       setSelectedValues,
