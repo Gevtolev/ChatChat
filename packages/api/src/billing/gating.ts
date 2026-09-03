@@ -1,3 +1,4 @@
+import { logger } from '@librechat/data-schemas';
 import type { Types } from 'mongoose';
 import type { ISubscriptionLean, IQuotaLean } from '@librechat/data-schemas';
 import { getActiveSubscription } from './applyPlanChange';
@@ -48,7 +49,25 @@ export async function checkBillingAccess(
     typeof args.userId === 'string' ? (args.userId as unknown as Types.ObjectId) : args.userId;
 
   const sub = await getActiveSubscription(userId, deps);
-  const plan = PLANS[sub.plan_code];
+
+  /** A `plan_code` with no entry in `PLANS` used to read as `undefined` and
+   *  throw on the next line — meaning every message that user sent returned a
+   *  500, with nothing naming the cause. Retiring a plan code is what creates
+   *  that row: the schema enum only constrains writes, so rows written before
+   *  the code was removed survive and keep resolving to nothing. Replacing
+   *  `pro_m`/`pro_q`/`pro_h` with the Plus/Pro/Max tiers was exactly that
+   *  change, and it was safe only because those three had no rows.
+   *
+   *  Fall back to `free` rather than to the old crash: it matches what an
+   *  account with no subscription at all already gets, and least privilege is
+   *  the right default for a plan we cannot identify. Logged at warn because a
+   *  user silently downgraded is a support ticket nobody can otherwise explain. */
+  const plan = PLANS[sub.plan_code] ?? PLANS.free;
+  if (PLANS[sub.plan_code] === undefined) {
+    logger.warn(
+      `[checkBillingAccess] unknown plan_code '${sub.plan_code}' for user ${String(userId)} — falling back to free`,
+    );
+  }
 
   /** Testing-phase escape hatch — flip DISABLE_BILLING_GATING off (or unset) to
    *  re-enable tier/quota enforcement before real launch. The anonymous free-trial

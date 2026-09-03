@@ -1,6 +1,6 @@
 import { PLANS } from './plans';
 
-const CODES = ['free', 'trial', 'pro_m', 'pro_q', 'pro_h'] as const;
+const CODES = ['free', 'trial', 'plus', 'pro', 'max'] as const;
 
 describe('PLANS', () => {
   test('every PlanCode has a config with matching code', () => {
@@ -23,7 +23,7 @@ describe('PLANS', () => {
     expect(PLANS.free.features.image_gen).toBe(false);
   });
   test('pro plans allow all tiers + all features and grant far more credits than free', () => {
-    for (const code of ['pro_m', 'pro_q', 'pro_h'] as const) {
+    for (const code of ['plus', 'pro', 'max'] as const) {
       expect(PLANS[code].allowed_cost_tiers).toEqual(['cheap', 'mid', 'expensive']);
       expect(PLANS[code].monthly_token_credits).toBeGreaterThan(
         PLANS.free.monthly_token_credits * 10,

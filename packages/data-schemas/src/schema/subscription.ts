@@ -11,7 +11,7 @@ const subscriptionSchema = new Schema<ISubscription>(
     },
     plan_code: {
       type: String,
-      enum: ['anonymous', 'free', 'trial', 'pro_m', 'pro_q', 'pro_h', 'beta'],
+      enum: ['anonymous', 'free', 'trial', 'plus', 'pro', 'max', 'beta'],
       required: true,
     },
     status: {

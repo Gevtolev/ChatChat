@@ -9,8 +9,9 @@ import { PLANS } from '~/billing/plans';
 /** 1 cent = 10 000 tokenCredits (a tokenCredit is one micro-dollar). */
 const CREDITS_PER_CENT = 10_000;
 
-/** 收入一律折算到 30 天口径。`monthly_price_cents` 的名字有误导：pro_q 存的是
- *  90 天总价、pro_h 是 180 天总价，直接相比会把季付用户的收入高估三倍。 */
+/** 收入一律折算到 30 天口径。三个付费档目前都是月付，所以这步是恒等式；保留
+ *  它是因为 `monthly_price_cents` 存的其实是**周期总价**，加年付档的那天不折算
+ *  就会把年付用户的收入高估十二倍。旧的 pro_q/pro_h（90/180 天）正是这个坑。 */
 function monthlyRevenueCredits(planCode: string): number | null {
   const plan = PLANS[planCode as PlanCode];
   if (plan === undefined) {

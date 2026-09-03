@@ -57,7 +57,7 @@ describe('billing schemas', () => {
       const end = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
       const sub = await Subscription.create({
         user_id: userId,
-        plan_code: 'pro_m',
+        plan_code: 'plus',
         status: 'active',
         source: 'admin',
         current_period_start: now,
@@ -67,7 +67,7 @@ describe('billing schemas', () => {
         metadata: {},
       });
       expect(sub._id).toBeDefined();
-      expect(sub.plan_code).toBe('pro_m');
+      expect(sub.plan_code).toBe('plus');
       expect(sub.status).toBe('active');
       expect(sub.source).toBe('admin');
     });
@@ -139,7 +139,7 @@ describe('billing schemas', () => {
         actor_id: adminId,
         action: 'plan.grant',
         target_user_id: targetUserId,
-        payload: { plan_code: 'pro_m', days: 30 },
+        payload: { plan_code: 'plus', days: 30 },
       });
       expect(log._id).toBeDefined();
       expect(log.action).toBe('plan.grant');
@@ -188,7 +188,7 @@ describe('billing methods', () => {
 
       await Subscription.create({
         user_id: userId,
-        plan_code: 'pro_m',
+        plan_code: 'plus',
         status: 'active',
         source: 'admin',
         current_period_start: periodStart,
@@ -225,7 +225,7 @@ describe('billing methods', () => {
       const uid = new mongoose.Types.ObjectId();
       await Subscription.create({
         user_id: uid,
-        plan_code: 'pro_m',
+        plan_code: 'plus',
         status: 'active',
         source: 'admin',
         current_period_start: periodStart,
@@ -260,7 +260,7 @@ describe('billing methods', () => {
       const uid = new mongoose.Types.ObjectId();
       const result = await subscriptionMethods.createSubscription({
         userId: uid,
-        planCode: 'pro_m',
+        planCode: 'plus',
         status: 'active',
         source: 'admin',
         periodStart,
@@ -270,7 +270,7 @@ describe('billing methods', () => {
       });
 
       expect(result._id).toBeDefined();
-      expect(result.plan_code).toBe('pro_m');
+      expect(result.plan_code).toBe('plus');
       expect(result.status).toBe('active');
 
       const inDb = await Subscription.findById(result._id).lean();
@@ -285,7 +285,7 @@ describe('billing methods', () => {
       await Subscription.create([
         {
           user_id: userA,
-          plan_code: 'pro_m',
+          plan_code: 'plus',
           status: 'active',
           source: 'admin',
           current_period_start: now,
@@ -301,7 +301,7 @@ describe('billing methods', () => {
         },
         {
           user_id: userC,
-          plan_code: 'pro_h',
+          plan_code: 'max',
           status: 'expired',
           source: 'admin',
           current_period_start: now,
@@ -316,7 +316,7 @@ describe('billing methods', () => {
       ]);
 
       const byUser = new Map(rows.map((row) => [row.user_id, row.plan_code]));
-      expect(byUser.get(userA.toString())).toBe('pro_m');
+      expect(byUser.get(userA.toString())).toBe('plus');
       expect(byUser.get(userB.toString())).toBe('trial');
       /** An expired subscription grants nothing, so it must not appear. */
       expect(byUser.has(userC.toString())).toBe(false);
@@ -386,7 +386,7 @@ describe('billing methods', () => {
         actorId: adminId,
         action: 'plan.grant',
         targetUserId,
-        payload: { plan_code: 'pro_m', days: 30 },
+        payload: { plan_code: 'plus', days: 30 },
       });
 
       expect(result._id).toBeDefined();

@@ -61,22 +61,27 @@ describe('getUsage — request validation', () => {
 const RANGE = { from: '2026-08-01T00:00:00Z', to: '2026-08-31T00:00:00Z' };
 
 describe('getUsage — margin', () => {
-  it('prorates a quarterly plan to a 30-day figure', async () => {
+  /** The three paid tiers are all monthly, so proration is an identity for
+   *  them and would pass whether or not the code prorates at all. `trial` is
+   *  the only plan left whose period is not 30 days, so it is what keeps this
+   *  guarantee honest — a yearly tier added later would otherwise report twelve
+   *  times its real monthly revenue with nothing catching it. */
+  it('prorates a plan whose period is not 30 days to a 30-day figure', async () => {
     const deps = makeDeps({
       aggregateUsage: jest.fn().mockResolvedValue({
         byUser: [{ user_id: 'u1', credits: 1_000_000, calls: 3, models: ['glm-5.2'] }],
         byModel: [],
         byDay: [],
       }),
-      findActiveSubscriptions: jest.fn().mockResolvedValue([{ user_id: 'u1', plan_code: 'pro_q' }]),
+      findActiveSubscriptions: jest.fn().mockResolvedValue([{ user_id: 'u1', plan_code: 'trial' }]),
       findUserEmails: jest.fn().mockResolvedValue([{ _id: 'u1', email: 'a@example.com' }]),
     });
     const res = mockRes();
     await createAdminUsageHandlers(deps).getUsage(req(RANGE), res);
 
     const row = (res.body as { users: AdminUsageUserRow[] }).users[0];
-    /** 7999 cents over 90 days -> 2666.33 cents per 30 days -> 26_663_333 credits */
-    expect(row.revenue_credits).toBe(Math.round((7999 * 30 * 10_000) / 90));
+    /** 100 cents over 7 days -> 428.57 cents per 30 days -> 4_285_714 credits */
+    expect(row.revenue_credits).toBe(Math.round((100 * 30 * 10_000) / 7));
     expect(row.margin_credits).toBe((row.revenue_credits as number) - 1_000_000);
   });
 

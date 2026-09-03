@@ -53,11 +53,15 @@ export interface PlanChangeDeps {
 // Period-days defaults per plan_code
 // ---------------------------------------------------------------------------
 
-/** 各档订阅周期天数。成本看板用它把周期总价折算成 30 天口径的收入。 */
+/** 各档订阅周期天数。成本看板用它把周期总价折算成 30 天口径的收入。
+ *
+ *  三个付费档现在都是月付 —— 它们是额度不同的档位，不再是同一产品的不同
+ *  周期（旧的 pro_m/pro_q/pro_h 是后者）。折算因此都是 1:1，但这张表保留
+ *  下来，因为将来加年付档时它仍是唯一需要改的地方。 */
 export const PERIOD_DAYS: Record<PlanCode, number> = {
-  pro_m: 30,
-  pro_q: 90,
-  pro_h: 180,
+  plus: 30,
+  pro: 30,
+  max: 30,
   trial: 7,
   free: 30,
   anonymous: 30,
