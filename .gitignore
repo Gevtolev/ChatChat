@@ -182,3 +182,6 @@ CLAUDE.md
 
 # Local Docker image bundles for offline deploy (large binaries)
 dist-images/
+
+# Production config captures — plaintext secrets, never commit
+backups/
