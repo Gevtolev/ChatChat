@@ -10,11 +10,17 @@ export type QuotaPeriod = 'lifetime' | 'daily';
  * 每月发放的 tokenCredits。这是**内部计量单位**，与上游 Balance 一致：
  * 1 tokenCredit = 1e-6 美元的算力成本。
  *
- * 用户看到的「积分」是它除以 CREDIT_DISPLAY_DIVISOR 的结果 —— 例如
- * 12,000,000 tokenCredits（$12 成本）展示为 100 万积分。两者分开是因为
+ * 用户看到的「积分」是它除以 CREDIT_DISPLAY_DIVISOR 的结果。两者分开是因为
  * 扣费必须按真实成本走 `spendTokens`，而展示要对齐售价口径。
+ *
+ * 除数由**入门档的锚点**决定，不是随便取的：$29.9 的 Plus 展示为 100 万积分，
+ * 而按 50% 毛利它的成本是 $14.95，所以 14,950,000 / 1,000,000 = 14.95。
+ *
+ * 换过一次（原为 12）。12 对应的是旧 pro_m 在 60% 毛利下的 $12 成本 —— 同样
+ * 锚在「$29.9 = 100 万积分」，但毛利是 60% 而非 50%。两个数只能满足一个，选了
+ * 毛利：除数纯粹是展示常量，当时全仓无人消费，改它的代价是零。
  */
-export const CREDIT_DISPLAY_DIVISOR = 12;
+export const CREDIT_DISPLAY_DIVISOR = 14.95;
 
 export interface PlanConfig {
   code: PlanCode;

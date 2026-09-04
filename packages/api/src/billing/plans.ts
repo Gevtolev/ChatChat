@@ -36,10 +36,21 @@ export const PLANS: Record<PlanCode, PlanConfig> = {
    * 之前，那是把复杂度花在没被证实的假设上。要改也容易，`allowed_cost_tiers`
    * 和 `features` 本来就是逐档配置的。
    *
-   * 额度 = 售价 × 50%，单位是成本的微美元（1 credit = 1e-6 美元算力成本）：
-   *   $29.9 × 50% = $14.95 → 14,950,000
-   *   $59.9 × 50% = $29.95 → 29,950,000
-   *   $99.9 × 50% = $49.95 → 49,950,000
+   * 额度由**用户看到的整数积分**倒推，而不是由售价直接乘出来：展示口径是
+   * `CREDIT_DISPLAY_DIVISOR = 14.95`，锚点是「Plus = 100 万积分」。
+   *
+   *   Plus  100 万 × 14.95 = 14,950,000  → 成本 $14.95，毛利 50.0%
+   *   Pro   200 万 × 14.95 = 29,900,000  → 成本 $29.90，毛利 50.1%
+   *   Max   350 万 × 14.95 = 52,325,000  → 成本 $52.33，毛利 47.6%
+   *
+   * Max 是 350 万而不是 300 万，因为 $99.9 是 $29.9 的 3.34 倍：给 300 万的话
+   * 最贵的档每美元买到的积分（30,030）反而**少于**最便宜的档（33,445），阶梯
+   * 是倒的，没有人有理由升上去。350 万让它略优（35,035），代价是毛利从 50%
+   * 降到 47.6%。
+   *
+   * Pro 保持 200 万这个整数，每美元 33,389 与 Plus 的 33,445 几乎持平。计量型
+   * 产品按同一费率卖更多容量是常见做法，而且毛利可预测在这里格外重要 ——
+   * 见下方关于 Opus 少报用量的说明。
    *
    * 取代了旧的 pro_m/pro_q/pro_h —— 那三个是同一产品的月/季/半年付，按 60%
    * 毛利定的额度。换档时生产库里这三个 code 一条记录都没有，无需迁移。
@@ -62,7 +73,7 @@ export const PLANS: Record<PlanCode, PlanConfig> = {
     name: 'Pro',
     monthly_price_cents: 5990,
     allowed_cost_tiers: ['cheap', 'mid', 'expensive'],
-    monthly_token_credits: 29_950_000,
+    monthly_token_credits: 29_900_000,
     lifetime_message_limit: 0,
     features: { agents: true, image_gen: true, voice: true, web_search: true },
   },
@@ -71,7 +82,7 @@ export const PLANS: Record<PlanCode, PlanConfig> = {
     name: 'Max',
     monthly_price_cents: 9990,
     allowed_cost_tiers: ['cheap', 'mid', 'expensive'],
-    monthly_token_credits: 49_950_000,
+    monthly_token_credits: 52_325_000,
     lifetime_message_limit: 0,
     features: { agents: true, image_gen: true, voice: true, web_search: true },
   },
@@ -81,11 +92,13 @@ export const PLANS: Record<PlanCode, PlanConfig> = {
    * $50 的参照是那个真实重度用户 18 天烧掉的 $51 —— 大致相当于一个月的高强度
    * 使用。内测的目的是让人放开用并给出反馈，而不是在第三天撞墙。
    *
-   * 定档时它远高于所有付费档（当时最高的 pro_m 是 11,996,000 ≈ $12）。改成
-   * Plus/Pro/Max 之后不再是了：max 是 49,950,000，两者实际相当。也就是说内测
-   * 用户现在拿到的约等于 Max 档的体验。这可以接受 —— 上面那个 $50 的依据本来
-   * 就是绝对用量而非「比最高档更高」—— 但如果将来要让内测明显宽松于最贵的付费
-   * 档，得主动抬这个数，它不会自己跟着涨。
+   * 定档时它远高于所有付费档（当时最高的 pro_m 是 11,996,000 ≈ $12）。现在
+   * 它**低于** Max（52,325,000）—— 内测用户拿到的比最贵的付费档还少一点。
+   *
+   * 保持不动，因为上面那个 $50 的依据是绝对用量（一个月高强度使用），不是
+   * 「比最高档更高」；而且付费档的额度是从售价倒推的，它跟内测该给多少本来
+   * 就是两件事。但这个数**不会自己跟着付费档涨**：哪天想让内测明显宽松于
+   * Max，得主动抬。
    *
    * `monthly_price_cents: 0` 意味着成本看板会把这些用户算成 100% 亏损。这是
    * 对的：内测确实没有收入，把它记成别的会污染毛利数据。
