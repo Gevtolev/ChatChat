@@ -1,3 +1,4 @@
+import type { EntitlementsDeps } from './entitlements';
 import type { PlanChangeDeps } from './applyPlanChange';
 import type { GatingDeps } from './gating';
 
@@ -18,13 +19,20 @@ import type { GatingDeps } from './gating';
  * compile time: the return annotations below are the interfaces themselves, so
  * dropping a key stops the build here, at the single place it is written.
  */
-export type BillingDbMethods = GatingDeps & PlanChangeDeps;
+export type BillingDbMethods = GatingDeps & PlanChangeDeps & EntitlementsDeps;
 
 export function buildGatingDeps(db: BillingDbMethods): GatingDeps {
   return {
     getActiveSubscriptionRecord: db.getActiveSubscriptionRecord,
     refreshMonthlyGrant: db.refreshMonthlyGrant,
     incrementQuota: db.incrementQuota,
+  };
+}
+
+export function buildEntitlementsDeps(db: BillingDbMethods): EntitlementsDeps {
+  return {
+    getActiveSubscriptionRecord: db.getActiveSubscriptionRecord,
+    findBalanceByUser: db.findBalanceByUser,
   };
 }
 

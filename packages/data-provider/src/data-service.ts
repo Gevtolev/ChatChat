@@ -1,6 +1,6 @@
 import type { AxiosResponse } from 'axios';
 import type * as t from './types';
-import type { AdminUsageParams, AdminUsageResponse } from './types/billing';
+import type { AdminUsageParams, AdminUsageResponse, TEntitlements } from './types/billing';
 import * as endpoints from './api-endpoints';
 import * as a from './types/assistants';
 import * as ag from './types/agents';
@@ -145,6 +145,10 @@ export function getUser(): Promise<t.TUser> {
 
 export function getUserBalance(): Promise<t.TBalanceResponse> {
   return request.get(endpoints.balance());
+}
+
+export function getEntitlements(): Promise<TEntitlements> {
+  return request.get(endpoints.billingEntitlements());
 }
 
 export const updateTokenCount = (text: string) => {

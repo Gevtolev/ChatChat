@@ -17,6 +17,7 @@ const projects = require('./projects');
 const prompts = require('./prompts');
 const skills = require('./skills');
 const balance = require('./balance');
+const billing = require('./billing');
 const actions = require('./actions');
 const apiKeys = require('./apiKeys');
 const banner = require('./banner');
@@ -65,6 +66,7 @@ module.exports = {
   actions,
   presets,
   balance,
+  billing,
   messages,
   memories,
   endpoints,

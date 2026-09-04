@@ -88,3 +88,40 @@ export interface AdminUsageResponse {
   models: AdminUsageModelRow[];
   days: AdminUsageDayRow[];
 }
+
+/**
+ * What the signed-in user's plan allows and how much allowance is left.
+ *
+ * Served by `GET /api/billing/entitlements`. Lives here rather than in
+ * `@librechat/api` because the client is the reason it exists — the model
+ * picker and the allowance display both read it, and a second definition on
+ * that side would be free to drift from the one the gate enforces.
+ */
+export interface TEntitlements {
+  plan: {
+    code: PlanCode;
+    name: string;
+    allowedCostTiers: CostTier[];
+    features: PlanConfig['features'];
+  };
+  /**
+   * Null for plans that grant no credits — the anonymous tier, capped by
+   * message count instead. Zero would render as an exhausted allowance rather
+   * than an absent one.
+   */
+  credits: {
+    remaining: number;
+    granted: number;
+    /** Sent rather than hard-coded client-side so the two cannot drift. */
+    displayDivisor: number;
+  } | null;
+  /** ISO 8601, when the current allowance resets. */
+  periodEnd: string | null;
+  /**
+   * Spec names this plan cannot reach, for greying them out in the picker.
+   *
+   * Absent means "not computed" and must be read as "lock nothing": guessing
+   * from a partial answer would hide models the user is entitled to.
+   */
+  lockedModelSpecs?: string[];
+}

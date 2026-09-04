@@ -7,6 +7,9 @@ const mockHandleSelectModel = jest.fn();
 const mockHandleSelectEndpoint = jest.fn();
 let mockSelectedValues: SelectedValues;
 
+/** Mutable so a test can lock a spec without re-mocking the context. */
+const mockLockedSpecs = new Set<string>();
+
 jest.mock('~/components/Chat/Menus/Endpoints/ModelSelectorContext', () => ({
   useModelSelectorContext: () => ({
     selectedValues: mockSelectedValues,
@@ -14,6 +17,7 @@ jest.mock('~/components/Chat/Menus/Endpoints/ModelSelectorContext', () => ({
     handleSelectModel: mockHandleSelectModel,
     handleSelectEndpoint: mockHandleSelectEndpoint,
     endpointsConfig: {},
+    lockedSpecs: mockLockedSpecs,
   }),
 }));
 

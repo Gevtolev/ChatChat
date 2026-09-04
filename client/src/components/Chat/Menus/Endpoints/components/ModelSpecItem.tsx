@@ -15,13 +15,21 @@ interface ModelSpecItemProps {
 
 export function ModelSpecItem({ spec, isSelected }: ModelSpecItemProps) {
   const localize = useLocalize();
-  const { handleSelectSpec, endpointsConfig } = useModelSelectorContext();
+  const { handleSelectSpec, endpointsConfig, lockedSpecs } = useModelSelectorContext();
   const { isFavoriteSpec, toggleFavoriteSpec } = useFavorites();
   const { showIconInMenu = true } = spec;
 
   const { ref: itemRef, isActive } = useIsActiveItem<HTMLDivElement>();
 
   const isFavorite = isFavoriteSpec(spec.name);
+  /**
+   * Shown but not selectable, rather than hidden. A locked model is the clearest
+   * statement of what a subscription buys — hiding it means a free user never
+   * learns the product has an Opus tier at all. Selecting it used to be allowed
+   * and failed only after the message was sent, which put the refusal at the
+   * worst possible moment.
+   */
+  const isLocked = lockedSpecs.has(spec.name);
 
   const handleFavoriteClick = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -31,9 +39,21 @@ export function ModelSpecItem({ spec, isSelected }: ModelSpecItemProps) {
   return (
     <MenuItem
       ref={itemRef}
-      onClick={() => handleSelectSpec(spec)}
+      onClick={isLocked ? undefined : () => handleSelectSpec(spec)}
+      disabled={isLocked}
       aria-selected={isSelected || undefined}
-      className="group flex w-full cursor-pointer items-center justify-between rounded-lg px-2 text-sm"
+      aria-disabled={isLocked || undefined}
+      /** The reason travels with the row rather than only in a hover tooltip,
+       *  which a keyboard or touch user never sees. */
+      title={isLocked ? localize('com_ui_model_locked_upgrade') : undefined}
+      /** `CustomMenuItem` fades disabled rows to 25%, which is legible enough
+       *  for something you are meant to ignore. A locked model is the opposite
+       *  — it is the advertisement — so `twMerge` lets a later utility raise it
+       *  to something readable. */
+      className={cn(
+        'group flex w-full items-center justify-between rounded-lg px-2 text-sm',
+        isLocked ? 'cursor-not-allowed aria-disabled:opacity-60' : 'cursor-pointer',
+      )}
     >
       <div
         className={cn(
@@ -48,8 +68,14 @@ export function ModelSpecItem({ spec, isSelected }: ModelSpecItemProps) {
         )}
         <div className="flex min-w-0 flex-col gap-1">
           <span className="truncate text-left">{spec.label}</span>
-          {spec.description && (
-            <span className="break-words text-xs font-normal">{spec.description}</span>
+          {isLocked ? (
+            <span className="break-words text-xs font-normal text-text-tertiary">
+              {localize('com_ui_model_locked_upgrade')}
+            </span>
+          ) : (
+            spec.description && (
+              <span className="break-words text-xs font-normal">{spec.description}</span>
+            )
           )}
         </div>
       </div>

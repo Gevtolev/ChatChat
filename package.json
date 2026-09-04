@@ -14,6 +14,7 @@
     "backfill-plan-credits": "node config/backfill-plan-credits.js",
     "check-model-prices": "node config/check-model-prices.js",
     "probe-models": "node config/probe-models.js",
+    "backup-prod-config": "node config/backup-prod-config.js",
     "set-balance": "node config/set-balance.js",
     "list-balances": "node config/list-balances.js",
     "set-plan": "node config/set-plan.js",
