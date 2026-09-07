@@ -25,7 +25,7 @@ import {
 } from './SettingsTabs';
 import usePersonalizationAccess from '~/hooks/usePersonalizationAccess';
 import { useLocalize, TranslationKeys } from '~/hooks';
-import { useGetStartupConfig } from '~/data-provider';
+import { useGetStartupConfig, useGetEntitlements } from '~/data-provider';
 import { cn } from '~/utils';
 
 export default function Settings({ open, onOpenChange }: TDialogProps) {
@@ -36,6 +36,16 @@ export default function Settings({ open, onOpenChange }: TDialogProps) {
   const tabRefs = useRef({});
   const { hasAnyPersonalizationFeature, hasMemoryOptOut } = usePersonalizationAccess();
   const aboutEnabled = startupConfig?.interface?.buildInfo !== false;
+  /**
+   * Shown whenever entitlements resolve, not on upstream's `balance.enabled`.
+   * That flag governs upstream's balance system, which we deliberately never
+   * enable — keying the tab off it hid the plan and allowance from every user,
+   * permanently. Every account resolves to a plan, so the tab is meaningful for
+   * all of them; a plan without credits renders as "not metered" rather than as
+   * a zero.
+   */
+  const { data: entitlements } = useGetEntitlements();
+  const planTabEnabled = entitlements != null;
 
   useEffect(() => {
     if (!aboutEnabled && activeTab === SettingsTabValues.ABOUT) {
@@ -51,7 +61,7 @@ export default function Settings({ open, onOpenChange }: TDialogProps) {
       SettingsTabValues.SPEECH,
       ...(hasAnyPersonalizationFeature ? [SettingsTabValues.PERSONALIZATION] : []),
       SettingsTabValues.DATA,
-      ...(startupConfig?.balance?.enabled ? [SettingsTabValues.BALANCE] : []),
+      ...(planTabEnabled ? [SettingsTabValues.BALANCE] : []),
       SettingsTabValues.ACCOUNT,
       ...(aboutEnabled ? [SettingsTabValues.ABOUT] : []),
     ];
@@ -116,12 +126,12 @@ export default function Settings({ open, onOpenChange }: TDialogProps) {
       icon: <DataIcon />,
       label: 'com_nav_setting_data',
     },
-    ...(startupConfig?.balance?.enabled
+    ...(planTabEnabled
       ? [
           {
             value: SettingsTabValues.BALANCE,
             icon: <DollarSign size={18} />,
-            label: 'com_nav_setting_balance' as TranslationKeys,
+            label: 'com_nav_setting_plan' as TranslationKeys,
           },
         ]
       : ([] as { value: SettingsTabValues; icon: React.JSX.Element; label: TranslationKeys }[])),
@@ -261,7 +271,7 @@ export default function Settings({ open, onOpenChange }: TDialogProps) {
                     <Tabs.Content value={SettingsTabValues.DATA} tabIndex={-1}>
                       <Data />
                     </Tabs.Content>
-                    {startupConfig?.balance?.enabled && (
+                    {planTabEnabled && (
                       <Tabs.Content value={SettingsTabValues.BALANCE} tabIndex={-1}>
                         <Balance />
                       </Tabs.Content>

@@ -5,8 +5,14 @@ import Settings from './Settings';
 
 const mockUseGetStartupConfig = jest.fn();
 
+const mockEntitlements: unknown = { plan: { code: 'beta' }, credits: null };
+
 jest.mock('~/data-provider', () => ({
   useGetStartupConfig: () => mockUseGetStartupConfig(),
+  /** The Plan tab is shown whenever entitlements resolve; these tests are about
+   *  the About tab, so a resolved value keeps the tab list stable rather than
+   *  varying with an unrelated query. */
+  useGetEntitlements: () => ({ data: mockEntitlements }),
 }));
 
 jest.mock('~/hooks', () => ({
