@@ -1,3 +1,18 @@
+/**
+ * This fork meters credits by default, where upstream only does so when its
+ * balance feature is enabled. The two are different questions sharing one flag:
+ * `balance.enabled` also turns on upstream's pre-flight check and its
+ * *incrementing* refill, which would roll over credits we sell as expiring — so
+ * we leave it off and decide deduction separately, on `DISABLE_BILLING_GATING`,
+ * the same switch the gate reads.
+ *
+ * Config-driven metering was tried and is what caused the defect: production
+ * ran 1,032 transactions against eight balances still at their full grant,
+ * because nothing had set a flag that lives outside git.
+ *
+ * These cases therefore have to disable billing explicitly to mean what
+ * upstream meant by `balance: { enabled: false }` alone.
+ */
 import mongoose from 'mongoose';
 import { MongoMemoryServer } from 'mongodb-memory-server';
 import { matchModelName, findMatchingPattern } from './test-helpers';
@@ -23,6 +38,12 @@ let createAutoRefillTransaction: ReturnType<
   typeof createTransactionMethods
 >['createAutoRefillTransaction'];
 let getCacheMultiplier: ReturnType<typeof createTxMethods>['getCacheMultiplier'];
+
+/** These specs set `DISABLE_BILLING_GATING` per-case; leaking it would silently
+ *  disable metering for every case that runs after. */
+afterEach(() => {
+  delete process.env.DISABLE_BILLING_GATING;
+});
 
 describe('spendTokens', () => {
   let userId: mongoose.Types.ObjectId;
@@ -166,6 +187,7 @@ describe('spendTokens', () => {
   });
 
   it('should not update balance when the balance feature is disabled', async () => {
+    process.env.DISABLE_BILLING_GATING = 'true';
     // Balance is now passed directly in txData
     // Create a balance for the user
     await Balance.create({

@@ -14,6 +14,20 @@ const balanceSchema = new Schema<t.IBalance>({
     type: Number,
     default: 0,
   },
+  /**
+   * Credits bought outright, kept apart from the monthly grant because the
+   * grant is *overwritten* on renewal rather than added to — `refreshMonthlyGrant`
+   * sets `tokenCredits` to the plan's allowance, which is what makes an unused
+   * month not roll over. A top-up sharing that field would be erased by the next
+   * renewal, silently, along with whatever was paid for it.
+   *
+   * Absent on every row written before this field existed. Read it through
+   * `?? 0` and never filter on a bare equality, or those rows stop matching.
+   */
+  purchasedCredits: {
+    type: Number,
+    default: 0,
+  },
   // Automatic refill settings
   autoRefillEnabled: {
     type: Boolean,

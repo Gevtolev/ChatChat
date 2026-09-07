@@ -571,7 +571,16 @@ class BaseClient {
     }
 
     await checkBillingAccess(
-      { userId: this.user, modelId: this.modelOptions?.model ?? this.model },
+      {
+        userId: this.user,
+        modelId: this.modelOptions?.model ?? this.model,
+        /** Lets the gate refuse a call the balance cannot cover. Spending
+         *  clamps at zero, so without this a user one credit from empty could
+         *  start a request costing millions and we would absorb it. */
+        promptTokens,
+        endpoint: this.options.endpoint,
+        endpointTokenConfig: this.options.endpointTokenConfig,
+      },
       buildGatingDeps(db),
     );
 

@@ -170,6 +170,82 @@ export function createTransactionMethods(
   }
 
   /**
+   * Whether this transaction should draw the balance down.
+   *
+   * Upstream ties deduction to its own balance system being enabled. We never
+   * enable it — our gate and our renewal are our own, and upstream's refill
+   * increments where ours overwrites, so running both would roll credits over
+   * that we sell as expiring. The consequence went unnoticed: `balance.enabled`
+   * also guards deduction, so credits were never actually spent. Production had
+   * 1,032 transactions against eight balances all sitting at their full grant.
+   *
+   * Decided here rather than by threading a flag through callers: every caller
+   * lives in `/api`, which is plain JS and gets no compile-time check that it
+   * passed one. `billing/deps.ts` documents four call sites that had each
+   * silently dropped a required field for exactly that reason.
+   *
+   * `DISABLE_BILLING_GATING` is the same switch `checkBillingAccess` reads, so
+   * metering and enforcement cannot disagree about whether billing is on.
+   */
+  function shouldDeduct(balance?: { enabled?: boolean }): boolean {
+    if (balance?.enabled === true) {
+      return true;
+    }
+    const disabled = String(process.env.DISABLE_BILLING_GATING ?? '').toLowerCase();
+    return disabled !== 'true' && disabled !== '1';
+  }
+
+  /**
+   * Splits a balance change across the granted and purchased buckets.
+   *
+   * Spending draws the **granted** allowance down first. That bucket is
+   * overwritten at renewal whether or not it was used, so anything left in it
+   * is about to be lost; the purchased bucket keeps its value indefinitely.
+   * Spending purchased credits while granted ones expired underneath would
+   * destroy value the user paid for, for no reason.
+   *
+   * Credit (a positive change — auto-refill, the signup grant) lands entirely
+   * on `tokenCredits`, which is what those paths have always meant. Purchases
+   * add to the other bucket through their own path, not through here.
+   *
+   * Overspending clamps both to zero rather than going negative, matching what
+   * the single-bucket version did.
+   */
+  function applySpend(
+    granted: number,
+    purchased: number,
+    incrementValue: number,
+  ): { tokenCredits: number; purchasedCredits: number } {
+    if (incrementValue >= 0) {
+      return { tokenCredits: granted + incrementValue, purchasedCredits: purchased };
+    }
+    const spend = -incrementValue;
+    const fromGranted = Math.min(granted, spend);
+    const fromPurchased = Math.min(purchased, spend - fromGranted);
+    return {
+      tokenCredits: Math.max(0, granted - fromGranted),
+      purchasedCredits: Math.max(0, purchased - fromPurchased),
+    };
+  }
+
+  /**
+   * Optimistic-concurrency clause for the purchased bucket.
+   *
+   * Cannot be a bare equality: every row written before the field existed has
+   * no `purchasedCredits` at all, and `{ purchasedCredits: 0 }` does not match a
+   * missing field — every balance update for those users would fail all ten
+   * retries and throw. The `$exists` arm is what keeps them writable, and it
+   * still fails the match if a concurrent purchase set a real value, which is
+   * the point of the clause.
+   */
+  function purchasedMatches(currentPurchased: number) {
+    if (currentPurchased !== 0) {
+      return { purchasedCredits: currentPurchased };
+    }
+    return { $or: [{ purchasedCredits: 0 }, { purchasedCredits: { $exists: false } }] };
+  }
+
+  /**
    * Updates a user's token balance using optimistic concurrency control.
    * Always returns an IBalance or throws after exhausting retries.
    */
@@ -192,12 +268,18 @@ export function createTransactionMethods(
       try {
         currentBalanceDoc = await Balance.findOne({ user }).lean<IBalance>();
         const currentCredits = currentBalanceDoc ? currentBalanceDoc.tokenCredits : 0;
-        const potentialNewCredits = currentCredits + incrementValue;
-        const newCredits = Math.max(0, potentialNewCredits);
+        const currentPurchased = currentBalanceDoc?.purchasedCredits ?? 0;
+
+        const { tokenCredits: newCredits, purchasedCredits: newPurchased } = applySpend(
+          currentCredits,
+          currentPurchased,
+          incrementValue,
+        );
 
         const updatePayload = {
           $set: {
             tokenCredits: newCredits,
+            purchasedCredits: newPurchased,
             ...(setValues ?? {}),
           },
         };
@@ -205,7 +287,7 @@ export function createTransactionMethods(
         let updatedBalance: IBalance | null = null;
         if (currentBalanceDoc) {
           updatedBalance = await Balance.findOneAndUpdate(
-            { user, tokenCredits: currentCredits },
+            { user, tokenCredits: currentCredits, ...purchasedMatches(currentPurchased) },
             updatePayload,
             { new: true },
           ).lean<IBalance>();
@@ -311,7 +393,7 @@ export function createTransactionMethods(
     calculateTokenValue(transaction);
 
     await transaction.save();
-    if (!balance?.enabled) {
+    if (!shouldDeduct(balance)) {
       return;
     }
 
@@ -349,7 +431,7 @@ export function createTransactionMethods(
 
     await transaction.save();
 
-    if (!balance?.enabled) {
+    if (!shouldDeduct(balance)) {
       return;
     }
 

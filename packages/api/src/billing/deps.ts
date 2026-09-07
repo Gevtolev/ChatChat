@@ -26,6 +26,7 @@ export function buildGatingDeps(db: BillingDbMethods): GatingDeps {
     getActiveSubscriptionRecord: db.getActiveSubscriptionRecord,
     refreshMonthlyGrant: db.refreshMonthlyGrant,
     incrementQuota: db.incrementQuota,
+    getMultiplier: db.getMultiplier,
   };
 }
 

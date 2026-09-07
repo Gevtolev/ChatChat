@@ -18,6 +18,14 @@ export interface GatingDeps {
     userId: Types.ObjectId;
     credits: number;
   }) => Promise<number | null>;
+  /** Price per token for the model being called, used to estimate this call's
+   *  cost before it runs. */
+  getMultiplier: (params: {
+    model?: string;
+    endpoint?: string;
+    tokenType?: 'prompt' | 'completion';
+    endpointTokenConfig?: Record<string, Record<string, number>> | null;
+  }) => number;
   /** Only used for `lifetime_message_limit` (the anonymous trial). Credit-metered
    *  plans never touch it. */
   incrementQuota: (args: {
@@ -42,7 +50,19 @@ const LIFETIME_EPOCH = new Date(0);
  *   - 'upgrade_required_quota'  — message quota exhausted for the current period
  */
 export async function checkBillingAccess(
-  args: { userId: string | Types.ObjectId; modelId: string; featureFlag?: FeatureKey },
+  args: {
+    userId: string | Types.ObjectId;
+    modelId: string;
+    featureFlag?: FeatureKey;
+    /**
+     * Prompt tokens this call is about to send, for refusing one the balance
+     * cannot cover. Optional: a caller that cannot estimate skips the check
+     * rather than blocking, since a missing number is not evidence of anything.
+     */
+    promptTokens?: number;
+    endpoint?: string;
+    endpointTokenConfig?: Record<string, Record<string, number>> | null;
+  },
   deps: GatingDeps,
 ): Promise<void> {
   const userId =
@@ -127,7 +147,33 @@ export async function checkBillingAccess(
         userId,
         credits: plan.monthly_token_credits,
       })) ?? 0;
-    if (credits <= 0) {
+    /**
+     * Refuse a call the balance cannot cover, not merely one made at zero.
+     *
+     * Spending clamps at zero, so a user with one credit left could start a
+     * request costing millions and we would absorb the difference. Estimating
+     * from the prompt is what upstream's `checkBalance` does and the only part
+     * of that system worth borrowing — its refill increments where ours
+     * overwrites, which would roll over credits we sell as expiring.
+     *
+     * Prompt tokens only. Completion length is unknowable beforehand, so this
+     * bounds the overdraft rather than eliminating it; a caller that cannot
+     * estimate at all falls back to the old `<= 0` behaviour.
+     */
+    const estimatedCost =
+      args.promptTokens != null && args.promptTokens > 0
+        ? args.promptTokens *
+          Math.abs(
+            deps.getMultiplier({
+              model: args.modelId,
+              endpoint: args.endpoint,
+              tokenType: 'prompt',
+              endpointTokenConfig: args.endpointTokenConfig,
+            }),
+          )
+        : 0;
+
+    if (credits <= 0 || credits < estimatedCost) {
       throw new Error(
         JSON.stringify({
           code: 'upgrade_required_quota',

@@ -144,6 +144,71 @@ describe('checkBillingAccess — model tier gating', () => {
     );
   });
 
+  /** Spending clamps at zero, so without an estimate a user one credit from
+   *  empty could start a request costing millions and we would absorb the
+   *  difference. Prompt tokens only — completion length is unknowable
+   *  beforehand — so this bounds the overdraft rather than removing it. */
+  describe('overdraft', () => {
+    const RATE_1 = { 'gpt-5.4-nano': { prompt: 1, completion: 1 } };
+
+    async function fundedUser(credits: number) {
+      const userId = new mongoose.Types.ObjectId();
+      await applyPlanChange(
+        { user_id: userId, plan_code: 'plus', source: 'admin' },
+        buildApplyDeps(),
+      );
+      await mongoose.models.Balance.updateOne(
+        { user: userId },
+        { $set: { tokenCredits: credits } },
+      );
+      return userId;
+    }
+
+    test('refuses a call the remaining balance cannot cover', async () => {
+      expect.assertions(2);
+      const userId = await fundedUser(1_000);
+
+      await expectDenied(
+        checkBillingAccess(
+          {
+            userId,
+            modelId: 'gpt-5.4-nano',
+            promptTokens: 500_000,
+            endpointTokenConfig: RATE_1,
+          },
+          gatingDeps(),
+        ),
+        'upgrade_required_quota',
+      );
+    });
+
+    test('allows a call the balance covers', async () => {
+      const userId = await fundedUser(1_000_000);
+
+      await expect(
+        checkBillingAccess(
+          {
+            userId,
+            modelId: 'gpt-5.4-nano',
+            promptTokens: 500_000,
+            endpointTokenConfig: RATE_1,
+          },
+          gatingDeps(),
+        ),
+      ).resolves.toBeUndefined();
+    });
+
+    /** A caller that cannot estimate must not be blocked: a missing number is
+     *  not evidence that the call is unaffordable. */
+    test('falls back to the old zero-balance rule when no estimate is given', async () => {
+      const userId = await fundedUser(1_000);
+
+      await expect(
+        checkBillingAccess({ userId, modelId: 'gpt-5.4-nano' }, gatingDeps()),
+      ).resolves.toBeUndefined();
+    });
+  });
+
   test('unknown model treated as mid tier → free user denied (mid not in cheap)', async () => {
     expect.assertions(2);
     const userId = new mongoose.Types.ObjectId();
