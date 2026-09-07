@@ -40,6 +40,21 @@ describe('getEntitlements', () => {
     expect(result.periodEnd).toBe('2026-10-01T00:00:00.000Z');
   });
 
+  /** Must agree with `checkBillingAccess`, which spends and refuses against
+   *  both buckets. Counting only the grant showed a user who had just bought
+   *  credits an emptier meter than their balance — and, at zero grant with a
+   *  full top-up, an empty one. */
+  it('counts purchased credits as remaining', async () => {
+    const result = await getEntitlements(userId, {
+      ...deps({ getActiveSubscriptionRecord: subscription('plus') }),
+      findBalanceByUser: jest
+        .fn()
+        .mockResolvedValue({ tokenCredits: 0, purchasedCredits: 5_000_000 }),
+    });
+
+    expect(result.credits?.remaining).toBe(5_000_000);
+  });
+
   /** Must agree with `checkBillingAccess`, which reads a missing Balance as
    *  zero. Reporting the grant instead would show a full bar to an account the
    *  gate is about to refuse. */

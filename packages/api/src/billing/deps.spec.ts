@@ -22,10 +22,19 @@ const db = {
   grantMonthlyCredits: jest.fn(),
   createSubscription: jest.fn(),
   createQuota: jest.fn(),
+  getMultiplier: jest.fn(),
+  findBalanceByUser: jest.fn(),
 } as unknown as BillingDbMethods;
 
 describe('buildGatingDeps', () => {
-  const REQUIRED = ['getActiveSubscriptionRecord', 'refreshMonthlyGrant', 'incrementQuota'];
+  const REQUIRED = [
+    'getActiveSubscriptionRecord',
+    'refreshMonthlyGrant',
+    'incrementQuota',
+    /** Prices the call the gate is about to allow, so it can refuse one the
+     *  balance cannot cover. */
+    'getMultiplier',
+  ];
 
   test('supplies every key GatingDeps declares', () => {
     const deps = buildGatingDeps(db);

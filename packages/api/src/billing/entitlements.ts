@@ -1,4 +1,4 @@
-import { logger } from '@librechat/data-schemas';
+import { logger, spendableCredits } from '@librechat/data-schemas';
 import { CREDIT_DISPLAY_DIVISOR } from 'librechat-data-provider';
 import type { ISubscriptionLean } from '@librechat/data-schemas';
 import type { TEntitlements } from 'librechat-data-provider';
@@ -8,7 +8,9 @@ import { PLANS } from './plans';
 
 export interface EntitlementsDeps {
   getActiveSubscriptionRecord: (userId: Types.ObjectId) => Promise<ISubscriptionLean | null>;
-  findBalanceByUser: (userId: string) => Promise<{ tokenCredits?: number } | null>;
+  findBalanceByUser: (
+    userId: string,
+  ) => Promise<{ tokenCredits?: number; purchasedCredits?: number } | null>;
 }
 
 /** The wire contract lives in `librechat-data-provider` because the client is
@@ -51,10 +53,14 @@ export async function getEntitlements(
 
   if (granted > 0) {
     const balance = await deps.findBalanceByUser(String(userId));
-    /** A missing Balance row reads as zero, matching the gate — a user whose
+    /** Both buckets, through the same helper the gate uses — reporting only the
+     *  granted half would show a user who had just topped up as emptier than
+     *  they are, and `spendTokens` draws on the purchased half regardless.
+     *
+     *  A missing Balance row reads as zero, matching the gate — a user whose
      *  grant never landed must be shown nothing left, not unlimited. */
     credits = {
-      remaining: Math.max(0, balance?.tokenCredits ?? 0),
+      remaining: Math.max(0, spendableCredits(balance)),
       granted,
       displayDivisor: CREDIT_DISPLAY_DIVISOR,
     };

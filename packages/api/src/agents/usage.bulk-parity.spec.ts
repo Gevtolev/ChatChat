@@ -11,6 +11,13 @@ import type { RecordUsageDeps, RecordUsageParams } from './usage';
 import type { BulkWriteDeps, PricingFns } from './transactions';
 import { recordCollectedUsage } from './usage';
 
+/** Metering keys off `DISABLE_BILLING_GATING`; cleared before each case so a
+ *  case that sets it cannot leak forwards and a case asserting a charge landed
+ *  cannot inherit an ambient value from the shell. */
+beforeEach(() => {
+  delete process.env.DISABLE_BILLING_GATING;
+});
+
 describe('recordCollectedUsage — bulk path parity', () => {
   let mockSpendTokens: jest.Mock;
   let mockSpendStructuredTokens: jest.Mock;
@@ -543,7 +550,27 @@ describe('recordCollectedUsage — bulk path parity', () => {
   });
 
   describe('balance behavior parity', () => {
-    it('should not call updateBalance when balance is disabled — same as legacy', async () => {
+    /** The parity claim still holds — the legacy path made the same change — but
+     *  the shared behaviour is now the opposite: `balance.enabled` switches on
+     *  upstream's balance feature, not this fork's metering, which follows
+     *  `DISABLE_BILLING_GATING` instead. */
+    it('calls updateBalance even when balance is disabled — same as legacy', async () => {
+      const collectedUsage: UsageMetadata[] = [
+        { input_tokens: 100, output_tokens: 50, model: 'gpt-4' },
+      ];
+
+      await recordCollectedUsage(deps, {
+        ...baseParams,
+        balance: { enabled: false },
+        collectedUsage,
+      });
+
+      expect(mockInsertMany).toHaveBeenCalledTimes(1);
+      expect(mockUpdateBalance).toHaveBeenCalledTimes(1);
+    });
+
+    it('calls neither when billing gating is disabled — same as legacy', async () => {
+      process.env.DISABLE_BILLING_GATING = 'true';
       const collectedUsage: UsageMetadata[] = [
         { input_tokens: 100, output_tokens: 50, model: 'gpt-4' },
       ];

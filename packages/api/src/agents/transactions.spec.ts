@@ -44,7 +44,11 @@ afterAll(async () => {
   await mongoServer.stop();
 });
 
+/** Metering keys off `DISABLE_BILLING_GATING`, so cases that set it must not
+ *  leak forwards, and cases that assert a charge landed must not inherit an
+ *  ambient value from the shell. Cleared before each, which covers both. */
 beforeEach(async () => {
+  delete process.env.DISABLE_BILLING_GATING;
   await mongoose.connection.dropDatabase();
 });
 
@@ -331,7 +335,36 @@ describe('bulkWriteTransactions (real DB)', () => {
     expect(bal!.tokenCredits).toBe(0);
   });
 
-  it('should NOT update balance when no docs have balance enabled', async () => {
+  /** Upstream's flag no longer decides this on its own: `balance.enabled` turns
+   *  on upstream's entire balance feature, which this fork does not run, so
+   *  metering is keyed to `DISABLE_BILLING_GATING` — the same switch the gate
+   *  reads. Leaving this path on the old flag is what let 1,032 production
+   *  transactions bill nobody. */
+  it('should still update balance when upstream balance flag is off', async () => {
+    const docs: PreparedEntry[] = [
+      {
+        doc: { user: testUserId, conversationId: 'c1', tokenType: 'prompt', tokenValue: -100 },
+        tokenValue: -100,
+        balance: { enabled: false },
+      },
+    ];
+    const dbOps = {
+      insertMany: dbMethods.bulkInsertTransactions,
+      updateBalance: dbMethods.updateBalance,
+    };
+    await bulkWriteTransactions({ user: testUserId, docs }, dbOps);
+
+    const txCount = await Transaction.countDocuments({ user: testUserId });
+    expect(txCount).toBe(1);
+    const bal = (await Balance.findOne({ user: testUserId }).lean()) as Record<
+      string,
+      unknown
+    > | null;
+    expect(bal!.tokenCredits).toBe(0);
+  });
+
+  it('should NOT update balance when billing gating is disabled', async () => {
+    process.env.DISABLE_BILLING_GATING = 'true';
     const docs: PreparedEntry[] = [
       {
         doc: { user: testUserId, conversationId: 'c1', tokenType: 'prompt', tokenValue: -100 },
@@ -351,7 +384,10 @@ describe('bulkWriteTransactions (real DB)', () => {
     expect(bal).toBeNull();
   });
 
-  it('should only sum tokenValue from balance-enabled docs', async () => {
+  /** With gating off, upstream's per-doc flag is the only thing left that can
+   *  opt a document *in*, so the mixed case still has to sum correctly. */
+  it('should only sum tokenValue from balance-enabled docs when gating is disabled', async () => {
+    process.env.DISABLE_BILLING_GATING = 'true';
     await Balance.create({ user: testUserId, tokenCredits: 1000 });
 
     const docs: PreparedEntry[] = [
@@ -379,7 +415,9 @@ describe('bulkWriteTransactions (real DB)', () => {
     expect(bal!.tokenCredits).toBe(900);
   });
 
-  it('should handle null balance gracefully', async () => {
+  /** `null` is what `getBalanceConfig` returns in production, so this is the
+   *  live shape rather than an edge case: it must charge like any other. */
+  it('should charge when balance config is null', async () => {
     const docs: PreparedEntry[] = [
       {
         doc: { user: testUserId, conversationId: 'c1', tokenType: 'prompt', tokenValue: -100 },
@@ -395,8 +433,11 @@ describe('bulkWriteTransactions (real DB)', () => {
 
     const txCount = await Transaction.countDocuments({ user: testUserId });
     expect(txCount).toBe(1);
-    const bal = await Balance.findOne({ user: testUserId }).lean();
-    expect(bal).toBeNull();
+    const bal = (await Balance.findOne({ user: testUserId }).lean()) as Record<
+      string,
+      unknown
+    > | null;
+    expect(bal!.tokenCredits).toBe(0);
   });
 });
 

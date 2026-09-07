@@ -80,7 +80,11 @@ afterAll(async () => {
   await mongoServer.stop();
 });
 
+/** Metering keys off `DISABLE_BILLING_GATING`, so cases that set it must not
+ *  leak forwards, and cases that assert a charge landed must not inherit an
+ *  ambient value from the shell. Cleared before each, which covers both. */
 beforeEach(async () => {
+  delete process.env.DISABLE_BILLING_GATING;
   await mongoose.connection.dropDatabase();
 });
 
@@ -145,22 +149,35 @@ describe('Standard token parity', () => {
     expect(completionTx!.tokenValue).toBe(-completionTokens * completionMultiplier);
   });
 
-  test('balance unchanged when balance.enabled is false — identical to legacy path', async () => {
+  /** Upstream stops here; this fork does not. `balance.enabled` turns on
+   *  upstream's *whole* balance feature — pre-flight check and incrementing
+   *  refill included — and we run neither, so metering is decided separately on
+   *  `DISABLE_BILLING_GATING`. The legacy path made the same change, so the
+   *  parity this file exists to protect still holds: both charge. */
+  test('balance still charged when balance.enabled is false — identical to legacy path', async () => {
     const userId = new mongoose.Types.ObjectId().toString();
     const initialBalance = 10000000;
     await Balance.create({ user: userId, tokenCredits: initialBalance });
 
+    const model = 'gpt-3.5-turbo';
+    const promptTokens = 100;
+    const completionTokens = 50;
+    const expectedCost =
+      promptTokens * getMultiplier({ model, tokenType: 'prompt', inputTokenCount: promptTokens }) +
+      completionTokens *
+        getMultiplier({ model, tokenType: 'completion', inputTokenCount: promptTokens });
+
     const entries = prepareTokenSpend(
-      txMeta(userId, { model: 'gpt-3.5-turbo', balance: { enabled: false } }),
-      { promptTokens: 100, completionTokens: 50 },
+      txMeta(userId, { model, balance: { enabled: false } }),
+      { promptTokens, completionTokens },
       pricing,
     );
     await bulkWriteTransactions({ user: userId, docs: entries }, dbOps());
 
     const balance = (await Balance.findOne({ user: userId }).lean()) as Record<string, unknown>;
-    expect(balance.tokenCredits).toBe(initialBalance);
+    expect(balance.tokenCredits).toBeCloseTo(initialBalance - expectedCost, 0);
     const txns = await Transaction.find({ user: userId }).lean();
-    expect(txns).toHaveLength(2); // transactions still inserted
+    expect(txns).toHaveLength(2);
   });
 
   test('no docs when transactions.enabled is false — identical to legacy path', async () => {
@@ -181,15 +198,27 @@ describe('Standard token parity', () => {
     expect(balance.tokenCredits).toBe(initialBalance);
   });
 
-  test('abort context — transactions inserted, no balance update when balance not passed', async () => {
+  /** No balance config at all is the shape production actually passes, since
+   *  `getBalanceConfig` returns null when upstream's feature is off. An aborted
+   *  generation still consumed tokens from the provider, so it is still
+   *  charged. */
+  test('abort context — transactions inserted and charged when balance not passed', async () => {
     const userId = new mongoose.Types.ObjectId().toString();
     const initialBalance = 10000000;
     await Balance.create({ user: userId, tokenCredits: initialBalance });
 
     const model = 'gpt-3.5-turbo';
+    const promptTokens = 100;
+    const completionTokens = 50;
+    /** `'abort'` is not `'incomplete'`, so `CANCEL_RATE` does not apply here. */
+    const expectedCost =
+      promptTokens * getMultiplier({ model, tokenType: 'prompt', inputTokenCount: promptTokens }) +
+      completionTokens *
+        getMultiplier({ model, tokenType: 'completion', inputTokenCount: promptTokens });
+
     const entries = prepareTokenSpend(
       txMeta(userId, { model, context: 'abort', balance: undefined }),
-      { promptTokens: 100, completionTokens: 50 },
+      { promptTokens, completionTokens },
       pricing,
     );
     await bulkWriteTransactions({ user: userId, docs: entries }, dbOps());
@@ -197,7 +226,7 @@ describe('Standard token parity', () => {
     const txns = await Transaction.find({ user: userId }).lean();
     expect(txns).toHaveLength(2);
     const balance = (await Balance.findOne({ user: userId }).lean()) as Record<string, unknown>;
-    expect(balance.tokenCredits).toBe(initialBalance);
+    expect(balance.tokenCredits).toBeCloseTo(initialBalance - expectedCost, 0);
   });
 
   test('NaN promptTokens — only completion doc inserted, identical to legacy', async () => {

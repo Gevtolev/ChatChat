@@ -1,4 +1,5 @@
 import { logger } from '@librechat/data-schemas';
+import { CREDIT_DISPLAY_DIVISOR } from 'librechat-data-provider';
 import type { Types } from 'mongoose';
 import type { ISubscriptionLean, IQuotaLean } from '@librechat/data-schemas';
 import { getActiveSubscription } from './applyPlanChange';
@@ -18,6 +19,15 @@ export interface GatingDeps {
     userId: Types.ObjectId;
     credits: number;
   }) => Promise<number | null>;
+  /** Price per token for the model being called, used to estimate this call's
+   *  cost before it runs. */
+  getMultiplier: (params: {
+    model?: string;
+    endpoint?: string;
+    tokenType?: 'prompt' | 'completion';
+    inputTokenCount?: number;
+    endpointTokenConfig?: Record<string, Record<string, number>> | null;
+  }) => number;
   /** Only used for `lifetime_message_limit` (the anonymous trial). Credit-metered
    *  plans never touch it. */
   incrementQuota: (args: {
@@ -36,13 +46,26 @@ const LIFETIME_EPOCH = new Date(0);
  * Throws `Error(JSON.stringify({ code, ... }))` on denial — callers parse the
  * JSON payload to extract `code` and surface the right UI message.
  *
- * Three denial codes (lowercase, matching the future ErrorTypes enum values):
+ * Four denial codes (lowercase, matching the future ErrorTypes enum values):
  *   - 'upgrade_required_model'  — model tier blocked by current plan
  *   - 'feature_not_available'   — feature flag disabled on current plan
  *   - 'upgrade_required_quota'  — message quota exhausted for the current period
+ *   - 'insufficient_credits'    — credit allowance cannot cover this call
  */
 export async function checkBillingAccess(
-  args: { userId: string | Types.ObjectId; modelId: string; featureFlag?: FeatureKey },
+  args: {
+    userId: string | Types.ObjectId;
+    modelId: string;
+    featureFlag?: FeatureKey;
+    /**
+     * Prompt tokens this call is about to send, for refusing one the balance
+     * cannot cover. Optional: a caller that cannot estimate skips the check
+     * rather than blocking, since a missing number is not evidence of anything.
+     */
+    promptTokens?: number;
+    endpoint?: string;
+    endpointTokenConfig?: Record<string, Record<string, number>> | null;
+  },
   deps: GatingDeps,
 ): Promise<void> {
   const userId =
@@ -127,12 +150,54 @@ export async function checkBillingAccess(
         userId,
         credits: plan.monthly_token_credits,
       })) ?? 0;
-    if (credits <= 0) {
+    /**
+     * Refuse a call the balance cannot cover, not merely one made at zero.
+     *
+     * Spending clamps at zero, so a user with one credit left could start a
+     * request costing millions and we would absorb the difference. Estimating
+     * from the prompt is what upstream's `checkBalance` does and the only part
+     * of that system worth borrowing — its refill increments where ours
+     * overwrites, which would roll over credits we sell as expiring.
+     *
+     * Prompt tokens only. Completion length is unknowable beforehand, so this
+     * bounds the overdraft rather than eliminating it; a caller that cannot
+     * estimate at all falls back to the old `<= 0` behaviour.
+     */
+    const estimatedCost =
+      args.promptTokens != null && args.promptTokens > 0
+        ? args.promptTokens *
+          Math.abs(
+            deps.getMultiplier({
+              model: args.modelId,
+              endpoint: args.endpoint,
+              tokenType: 'prompt',
+              endpointTokenConfig: args.endpointTokenConfig,
+              /** Selects the premium long-context rate where a model has one.
+               *  Omitting it priced every call at the base rate — under-
+               *  estimating precisely the large prompts this check exists to
+               *  catch, and by the widest margin. */
+              inputTokenCount: args.promptTokens,
+            }),
+          )
+        : 0;
+
+    if (credits <= 0 || credits < estimatedCost) {
+      /**
+       * Its own code rather than `upgrade_required_quota`, which is a *message*
+       * count — the anonymous trial's, and the only thing its wording fits.
+       * Reusing it here told a paying customer they had "reached your quota of
+       * 14950000 messages", a sentence that is wrong about the unit, the number
+       * and, when the balance merely cannot cover one large prompt, the fact.
+       *
+       * Reported in display credits because that is the only unit the user has
+       * ever been shown; the client has no divisor until entitlements load, and
+       * an error must not depend on a separate request having succeeded.
+       */
       throw new Error(
         JSON.stringify({
-          code: 'upgrade_required_quota',
-          used: plan.monthly_token_credits,
-          limit: plan.monthly_token_credits,
+          code: 'insufficient_credits',
+          remaining: Math.max(0, Math.floor(credits / CREDIT_DISPLAY_DIVISOR)),
+          required: Math.ceil(estimatedCost / CREDIT_DISPLAY_DIVISOR),
         }),
       );
     }

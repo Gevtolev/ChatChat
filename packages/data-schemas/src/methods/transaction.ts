@@ -1,4 +1,6 @@
 import logger from '~/config/winston';
+import { isMeteringEnabled } from '~/utils/metering';
+import { spendableCredits } from '~/utils/credits';
 import type { FilterQuery, Model, Types } from 'mongoose';
 import type { IBalance, IBalanceUpdate, TransactionData } from '~/types';
 import type { ITransaction } from '~/schema/transaction';
@@ -170,6 +172,69 @@ export function createTransactionMethods(
   }
 
   /**
+   * Splits a balance change across the granted and purchased buckets.
+   *
+   * Spending draws the **granted** allowance down first. That bucket is
+   * overwritten at renewal whether or not it was used, so anything left in it
+   * is about to be lost; the purchased bucket keeps its value indefinitely.
+   * Spending purchased credits while granted ones expired underneath would
+   * destroy value the user paid for, for no reason.
+   *
+   * Credit (a positive change — auto-refill, the signup grant) lands entirely
+   * on `tokenCredits`, which is what those paths have always meant. Purchases
+   * add to the other bucket through their own path, not through here.
+   *
+   * Overspending clamps both to zero rather than going negative, matching what
+   * the single-bucket version did.
+   */
+  function applySpend(
+    currentGranted: number,
+    currentPurchased: number,
+    incrementValue: number,
+  ): { tokenCredits: number; purchasedCredits: number } {
+    /** Floored before anything is derived from them. A negative `tokenCredits`
+     *  — which upstream's balance system can leave behind — would otherwise make
+     *  `Math.min(granted, spend)` negative, so the remainder charged to the
+     *  purchased bucket would *exceed* the spend: a row at -100 spending 50 took
+     *  150 of the credits the user had paid for. */
+    const granted = Math.max(0, currentGranted);
+    const purchased = Math.max(0, currentPurchased);
+
+    if (incrementValue >= 0) {
+      return { tokenCredits: granted + incrementValue, purchasedCredits: purchased };
+    }
+    const spend = -incrementValue;
+    const fromGranted = Math.min(granted, spend);
+    const fromPurchased = Math.min(purchased, spend - fromGranted);
+    return {
+      tokenCredits: granted - fromGranted,
+      purchasedCredits: purchased - fromPurchased,
+    };
+  }
+
+  /**
+   * Optimistic-concurrency clause for one balance bucket.
+   *
+   * Cannot be a bare equality when the value read was zero, because zero is also
+   * what a *missing* field reads as, and `{ field: 0 }` does not match a missing
+   * field in MongoDB. `purchasedCredits` is absent on every row written before
+   * it existed, and `tokenCredits` is absent on rows not created through the
+   * schema; either way the update matches nothing, burns all ten retries and
+   * throws. The `$exists` arm keeps those rows writable while still failing the
+   * match if a concurrent write put a real value there, which is the whole point
+   * of the clause.
+   */
+  function matchesCurrent(
+    field: 'tokenCredits' | 'purchasedCredits',
+    current: number,
+  ): FilterQuery<IBalance> {
+    if (current !== 0) {
+      return { [field]: current };
+    }
+    return { $or: [{ [field]: 0 }, { [field]: { $exists: false } }] };
+  }
+
+  /**
    * Updates a user's token balance using optimistic concurrency control.
    * Always returns an IBalance or throws after exhausting retries.
    */
@@ -191,21 +256,38 @@ export function createTransactionMethods(
       let currentBalanceDoc: IBalance | null;
       try {
         currentBalanceDoc = await Balance.findOne({ user }).lean<IBalance>();
-        const currentCredits = currentBalanceDoc ? currentBalanceDoc.tokenCredits : 0;
-        const potentialNewCredits = currentCredits + incrementValue;
-        const newCredits = Math.max(0, potentialNewCredits);
+        /** Both read through `?? 0`. Reading one that way and not the other let
+         *  a row missing `tokenCredits` produce a NaN that `applySpend` then
+         *  wrote to *both* buckets, erasing purchased credits along with the
+         *  grant. */
+        const currentCredits = currentBalanceDoc?.tokenCredits ?? 0;
+        const currentPurchased = currentBalanceDoc?.purchasedCredits ?? 0;
+
+        const { tokenCredits: newCredits, purchasedCredits: newPurchased } = applySpend(
+          currentCredits,
+          currentPurchased,
+          incrementValue,
+        );
 
         const updatePayload = {
           $set: {
             tokenCredits: newCredits,
+            purchasedCredits: newPurchased,
             ...(setValues ?? {}),
           },
         };
 
-        let updatedBalance: IBalance | null = null;
         if (currentBalanceDoc) {
-          updatedBalance = await Balance.findOneAndUpdate(
-            { user, tokenCredits: currentCredits },
+          const updatedBalance = await Balance.findOneAndUpdate(
+            /** `$and` rather than spreading both clauses into one object: each
+             *  can be an `$or`, and the second would overwrite the first. */
+            {
+              user,
+              $and: [
+                matchesCurrent('tokenCredits', currentCredits),
+                matchesCurrent('purchasedCredits', currentPurchased),
+              ],
+            },
             updatePayload,
             { new: true },
           ).lean<IBalance>();
@@ -215,18 +297,23 @@ export function createTransactionMethods(
           }
           lastError = new Error(`Concurrency conflict for user ${user} on attempt ${attempt}.`);
         } else {
+          /**
+           * Insert, never upsert. An upsert on `{ user }` matches a row created
+           * between the read above and this write, and the payload is a `$set`
+           * of absolute values derived from a balance of zero — so a grant that
+           * landed in that window was overwritten with zero. Inserting instead
+           * fails with a duplicate key (the `user` index is unique for exactly
+           * this reason), and the retry re-reads and takes the compare-and-swap
+           * branch, which is the path that respects a concurrent write.
+           */
           try {
-            updatedBalance = await Balance.findOneAndUpdate({ user }, updatePayload, {
-              upsert: true,
-              new: true,
-            }).lean<IBalance>();
-
-            if (updatedBalance) {
-              return updatedBalance;
-            }
-            lastError = new Error(
-              `Upsert race condition suspected for user ${user} on attempt ${attempt}.`,
-            );
+            const created = await Balance.create({
+              user,
+              tokenCredits: newCredits,
+              purchasedCredits: newPurchased,
+              ...(setValues ?? {}),
+            });
+            return created.toObject() as IBalance;
           } catch (error: unknown) {
             if (
               error instanceof Error &&
@@ -311,7 +398,7 @@ export function createTransactionMethods(
     calculateTokenValue(transaction);
 
     await transaction.save();
-    if (!balance?.enabled) {
+    if (!isMeteringEnabled(balance)) {
       return;
     }
 
@@ -324,7 +411,7 @@ export function createTransactionMethods(
     return {
       rate: transaction.rate as number,
       user: transaction.user.toString() as string,
-      balance: balanceResponse.tokenCredits,
+      balance: spendableCredits(balanceResponse),
       [transaction.tokenType as string]: incrementValue,
     } as TransactionResult;
   }
@@ -349,7 +436,7 @@ export function createTransactionMethods(
 
     await transaction.save();
 
-    if (!balance?.enabled) {
+    if (!isMeteringEnabled(balance)) {
       return;
     }
 
@@ -363,7 +450,7 @@ export function createTransactionMethods(
     return {
       rate: transaction.rate as number,
       user: transaction.user.toString() as string,
-      balance: balanceResponse.tokenCredits,
+      balance: spendableCredits(balanceResponse),
       [transaction.tokenType as string]: incrementValue,
     } as TransactionResult;
   }

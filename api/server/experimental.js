@@ -23,7 +23,7 @@ const {
   preAuthTenantMiddleware,
 } = require('@librechat/api');
 const { connectDb, indexSync } = require('~/db');
-const { Quota } = require('~/db/models');
+const { Quota, Balance } = require('~/db/models');
 const initializeOAuthReconnectManager = require('./services/initializeOAuthReconnectManager');
 const createValidateImageRequest = require('./middleware/validateImageRequest');
 const { startExpiredFileSweep } = require('./services/Files/process');
@@ -283,6 +283,15 @@ if (cluster.isMaster) {
      * quota document. autoIndex is disabled in most deployments (MONGO_AUTO_INDEX),
      * so this index can't be left to Mongoose's automatic, connection-level sync. */
     await Quota.syncIndexes();
+
+    /* Balance's unique { user } index is load-bearing for the same reason, and
+     * needs syncIndexes() for one more: every existing deployment already has a
+     * *non-unique* index on that key, and MongoDB rejects createIndex on a key
+     * that already has an index with different options. Automatic index creation
+     * would log the conflict and leave the old one in place, so updateBalance's
+     * insert-on-miss would quietly write a second balance row for the user
+     * instead of colliding and retrying. syncIndexes() drops and rebuilds it. */
+    await Balance.syncIndexes();
 
     /** Background index sync (non-blocking) */
     indexSync().catch((err) => {

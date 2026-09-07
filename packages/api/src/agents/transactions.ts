@@ -1,4 +1,4 @@
-import { CANCEL_RATE } from '@librechat/data-schemas';
+import { CANCEL_RATE, isMeteringEnabled } from '@librechat/data-schemas';
 import type { TCustomConfig, TTransactionsConfig } from 'librechat-data-provider';
 import type { TransactionData } from '@librechat/data-schemas';
 import type { EndpointTokenConfig } from '~/types/tokens';
@@ -329,17 +329,25 @@ export async function bulkWriteTransactions(
     return;
   }
 
+  /**
+   * This is the path the agents endpoint actually takes — `client.js` passes
+   * both `pricing` and `bulkWriteOps`, so `useBulk` is always true there — and
+   * it was the one left on `balance?.enabled` when metering was decoupled from
+   * upstream's flag. The result was worse than the original defect: the
+   * non-bulk paths deducted while this one did not, so identical usage was
+   * charged or not depending on which deps the caller happened to wire.
+   */
   let totalTokenValue = 0;
-  let balanceEnabled = false;
+  let metered = false;
   const plainDocs = docs.map(({ doc, tokenValue, balance }) => {
-    if (balance?.enabled) {
-      balanceEnabled = true;
+    if (isMeteringEnabled(balance)) {
+      metered = true;
       totalTokenValue += tokenValue;
     }
     return doc;
   });
 
-  if (balanceEnabled) {
+  if (metered) {
     await dbOps.updateBalance({ user, incrementValue: totalTokenValue });
   }
 

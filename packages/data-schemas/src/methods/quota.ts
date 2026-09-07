@@ -1,3 +1,4 @@
+import { spendableCredits } from '~/utils/credits';
 import type { FilterQuery, Model, UpdateQuery } from 'mongoose';
 import type { IQuota, IQuotaLean } from '~/types/quota';
 import type { Types } from 'mongoose';
@@ -108,9 +109,12 @@ export function createQuotaMethods(mongoose: typeof import('mongoose')) {
     const Balance = mongoose.models.Balance as Model<{
       user: Types.ObjectId;
       tokenCredits: number;
+      purchasedCredits?: number;
     }>;
-    const doc = await Balance.findOne({ user: userId }).select('tokenCredits').lean();
-    return doc == null ? null : (doc.tokenCredits ?? 0);
+    const doc = await Balance.findOne({ user: userId })
+      .select('tokenCredits purchasedCredits')
+      .lean();
+    return doc == null ? null : spendableCredits(doc);
   }
 
   /**
@@ -162,7 +166,7 @@ export function createQuotaMethods(mongoose: typeof import('mongoose')) {
     ).lean();
 
     if (updated != null) {
-      return (updated.tokenCredits as number) ?? 0;
+      return spendableCredits(updated as { tokenCredits?: number; purchasedCredits?: number });
     }
     /** No row, or auto-refill was never armed — fall back to a plain read so a
      *  manually-created balance is still honoured. */
@@ -198,6 +202,34 @@ export function createQuotaMethods(mongoose: typeof import('mongoose')) {
     );
   }
 
+  /**
+   * Adds credits that do not expire at renewal.
+   *
+   * The single entry point for anything bought — a CLI top-up today, a Stripe
+   * one-time payment later — so both land in the bucket `refreshMonthlyGrant`
+   * leaves alone. Anything writing `tokenCredits` instead is granting credits
+   * that vanish on the user's renewal date.
+   *
+   * `$inc` rather than read-then-write: two purchases racing must both land,
+   * and there is no clamp to reason about since the amount is always positive.
+   * Upserts, because a user can buy before their first grant has created a row.
+   */
+  async function grantPurchasedCredits(args: {
+    userId: Types.ObjectId;
+    credits: number;
+  }): Promise<number> {
+    if (!Number.isFinite(args.credits) || args.credits <= 0) {
+      throw new Error(`[grantPurchasedCredits] credits must be positive, got ${args.credits}`);
+    }
+    const Balance = mongoose.models.Balance as Model<Record<string, unknown>>;
+    const updated = await Balance.findOneAndUpdate(
+      { user: args.userId },
+      { $inc: { purchasedCredits: args.credits } },
+      { new: true, upsert: true },
+    ).lean();
+    return ((updated?.purchasedCredits as number) ?? 0) as number;
+  }
+
   return {
     createQuota,
     incrementQuota,
@@ -205,6 +237,7 @@ export function createQuotaMethods(mongoose: typeof import('mongoose')) {
     getBalanceCredits,
     refreshMonthlyGrant,
     grantMonthlyCredits,
+    grantPurchasedCredits,
   };
 }
 
