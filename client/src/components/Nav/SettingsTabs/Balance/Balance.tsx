@@ -38,6 +38,36 @@ function Balance() {
     refillIntervalUnit !== undefined &&
     refillIntervalValue !== undefined;
 
+  /**
+   * Not cosmetic, whatever the upstream wording suggests: `refreshMonthlyGrant`
+   * only renews balances it finds with `autoRefillEnabled: true`, so an account
+   * without that flag never gets its allowance back — and would otherwise learn
+   * that a month later with nothing on screen having warned it.
+   *
+   * Built ahead of the JSX rather than nested inline: three outcomes off two
+   * booleans reads as a nested ternary, which CI rejects outright (it runs
+   * ESLint with `--max-warnings=0`).
+   */
+  let renewal: React.ReactNode = (
+    <div className="text-sm text-text-secondary">
+      {localize('com_nav_balance_auto_refill_disabled')}
+    </div>
+  );
+  if (autoRefillEnabled && hasValidRefillSettings) {
+    renewal = (
+      <AutoRefillSettings
+        lastRefill={lastRefill}
+        refillAmount={refillAmount}
+        refillIntervalUnit={refillIntervalUnit}
+        refillIntervalValue={refillIntervalValue}
+      />
+    );
+  } else if (autoRefillEnabled) {
+    renewal = (
+      <div className="text-sm text-red-600">{localize('com_nav_balance_auto_refill_error')}</div>
+    );
+  }
+
   const credits = entitlements?.credits ?? null;
   const remaining = credits ? toDisplayCredits(credits.remaining, credits.displayDivisor) : 0;
   const granted = credits ? toDisplayCredits(credits.granted, credits.displayDivisor) : 0;
@@ -100,31 +130,7 @@ function Balance() {
         </div>
       )}
 
-      {/**
-       * Not cosmetic here, whatever the upstream wording suggests:
-       * `refreshMonthlyGrant` only renews balances it finds with
-       * `autoRefillEnabled: true`, so an account without it never gets its
-       * allowance back and would otherwise discover that a month later with no
-       * explanation.
-       */}
-      {autoRefillEnabled ? (
-        hasValidRefillSettings ? (
-          <AutoRefillSettings
-            lastRefill={lastRefill}
-            refillAmount={refillAmount}
-            refillIntervalUnit={refillIntervalUnit}
-            refillIntervalValue={refillIntervalValue}
-          />
-        ) : (
-          <div className="text-sm text-red-600">
-            {localize('com_nav_balance_auto_refill_error')}
-          </div>
-        )
-      ) : (
-        <div className="text-sm text-text-secondary">
-          {localize('com_nav_balance_auto_refill_disabled')}
-        </div>
-      )}
+      {renewal}
     </div>
   );
 }
