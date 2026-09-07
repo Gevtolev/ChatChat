@@ -24,6 +24,7 @@ import { useLocalize, useNewConvo, useAuthContext, useHasAccess } from '~/hooks'
 import { clearMessagesCache, cn } from '~/utils';
 import store from '~/store';
 import ConversationsSection from './ConversationsSection';
+import AllowanceMeter from './AllowanceMeter';
 
 const AccountSettings = lazy(() => import('~/components/Nav/AccountSettings'));
 
@@ -219,9 +220,12 @@ function SideMenu({ onCollapse }: { onCollapse?: () => void }) {
             {localize('com_auth_login')}
           </Button>
         ) : (
-          <Suspense fallback={<Skeleton className="h-12 w-full rounded-xl" />}>
-            <AccountSettings />
-          </Suspense>
+          <>
+            <AllowanceMeter />
+            <Suspense fallback={<Skeleton className="h-12 w-full rounded-xl" />}>
+              <AccountSettings />
+            </Suspense>
+          </>
         )}
       </div>
     </div>
