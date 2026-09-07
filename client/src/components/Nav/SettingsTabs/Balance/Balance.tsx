@@ -100,13 +100,30 @@ function Balance() {
         </div>
       )}
 
-      {autoRefillEnabled && hasValidRefillSettings && (
-        <AutoRefillSettings
-          lastRefill={lastRefill}
-          refillAmount={refillAmount}
-          refillIntervalUnit={refillIntervalUnit}
-          refillIntervalValue={refillIntervalValue}
-        />
+      {/**
+       * Not cosmetic here, whatever the upstream wording suggests:
+       * `refreshMonthlyGrant` only renews balances it finds with
+       * `autoRefillEnabled: true`, so an account without it never gets its
+       * allowance back and would otherwise discover that a month later with no
+       * explanation.
+       */}
+      {autoRefillEnabled ? (
+        hasValidRefillSettings ? (
+          <AutoRefillSettings
+            lastRefill={lastRefill}
+            refillAmount={refillAmount}
+            refillIntervalUnit={refillIntervalUnit}
+            refillIntervalValue={refillIntervalValue}
+          />
+        ) : (
+          <div className="text-sm text-red-600">
+            {localize('com_nav_balance_auto_refill_error')}
+          </div>
+        )
+      ) : (
+        <div className="text-sm text-text-secondary">
+          {localize('com_nav_balance_auto_refill_disabled')}
+        </div>
       )}
     </div>
   );
