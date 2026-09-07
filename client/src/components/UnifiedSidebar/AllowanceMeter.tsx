@@ -49,7 +49,10 @@ function AllowanceMeter() {
         className="h-1 w-full overflow-hidden rounded-full bg-surface-tertiary"
         role="progressbar"
         aria-valuemin={0}
-        aria-valuemax={granted}
+        /** A top-up puts the remaining balance above the monthly grant, and a
+         *  `valuenow` past `valuemax` is an invalid range for a screen reader.
+         *  The bar itself stays clamped at full. */
+        aria-valuemax={Math.max(granted, remaining)}
         aria-valuenow={remaining}
         /** The bar alone conveys nothing to a screen reader, and the visible
          *  digits are only the numerator. */

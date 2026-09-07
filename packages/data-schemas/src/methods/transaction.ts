@@ -1,4 +1,6 @@
 import logger from '~/config/winston';
+import { isMeteringEnabled } from '~/utils/metering';
+import { spendableCredits } from '~/utils/credits';
 import type { FilterQuery, Model, Types } from 'mongoose';
 import type { IBalance, IBalanceUpdate, TransactionData } from '~/types';
 import type { ITransaction } from '~/schema/transaction';
@@ -170,32 +172,6 @@ export function createTransactionMethods(
   }
 
   /**
-   * Whether this transaction should draw the balance down.
-   *
-   * Upstream ties deduction to its own balance system being enabled. We never
-   * enable it — our gate and our renewal are our own, and upstream's refill
-   * increments where ours overwrites, so running both would roll credits over
-   * that we sell as expiring. The consequence went unnoticed: `balance.enabled`
-   * also guards deduction, so credits were never actually spent. Production had
-   * 1,032 transactions against eight balances all sitting at their full grant.
-   *
-   * Decided here rather than by threading a flag through callers: every caller
-   * lives in `/api`, which is plain JS and gets no compile-time check that it
-   * passed one. `billing/deps.ts` documents four call sites that had each
-   * silently dropped a required field for exactly that reason.
-   *
-   * `DISABLE_BILLING_GATING` is the same switch `checkBillingAccess` reads, so
-   * metering and enforcement cannot disagree about whether billing is on.
-   */
-  function shouldDeduct(balance?: { enabled?: boolean }): boolean {
-    if (balance?.enabled === true) {
-      return true;
-    }
-    const disabled = String(process.env.DISABLE_BILLING_GATING ?? '').toLowerCase();
-    return disabled !== 'true' && disabled !== '1';
-  }
-
-  /**
    * Splits a balance change across the granted and purchased buckets.
    *
    * Spending draws the **granted** allowance down first. That bucket is
@@ -212,10 +188,18 @@ export function createTransactionMethods(
    * the single-bucket version did.
    */
   function applySpend(
-    granted: number,
-    purchased: number,
+    currentGranted: number,
+    currentPurchased: number,
     incrementValue: number,
   ): { tokenCredits: number; purchasedCredits: number } {
+    /** Floored before anything is derived from them. A negative `tokenCredits`
+     *  — which upstream's balance system can leave behind — would otherwise make
+     *  `Math.min(granted, spend)` negative, so the remainder charged to the
+     *  purchased bucket would *exceed* the spend: a row at -100 spending 50 took
+     *  150 of the credits the user had paid for. */
+    const granted = Math.max(0, currentGranted);
+    const purchased = Math.max(0, currentPurchased);
+
     if (incrementValue >= 0) {
       return { tokenCredits: granted + incrementValue, purchasedCredits: purchased };
     }
@@ -223,26 +207,31 @@ export function createTransactionMethods(
     const fromGranted = Math.min(granted, spend);
     const fromPurchased = Math.min(purchased, spend - fromGranted);
     return {
-      tokenCredits: Math.max(0, granted - fromGranted),
-      purchasedCredits: Math.max(0, purchased - fromPurchased),
+      tokenCredits: granted - fromGranted,
+      purchasedCredits: purchased - fromPurchased,
     };
   }
 
   /**
-   * Optimistic-concurrency clause for the purchased bucket.
+   * Optimistic-concurrency clause for one balance bucket.
    *
-   * Cannot be a bare equality: every row written before the field existed has
-   * no `purchasedCredits` at all, and `{ purchasedCredits: 0 }` does not match a
-   * missing field — every balance update for those users would fail all ten
-   * retries and throw. The `$exists` arm is what keeps them writable, and it
-   * still fails the match if a concurrent purchase set a real value, which is
-   * the point of the clause.
+   * Cannot be a bare equality when the value read was zero, because zero is also
+   * what a *missing* field reads as, and `{ field: 0 }` does not match a missing
+   * field in MongoDB. `purchasedCredits` is absent on every row written before
+   * it existed, and `tokenCredits` is absent on rows not created through the
+   * schema; either way the update matches nothing, burns all ten retries and
+   * throws. The `$exists` arm keeps those rows writable while still failing the
+   * match if a concurrent write put a real value there, which is the whole point
+   * of the clause.
    */
-  function purchasedMatches(currentPurchased: number) {
-    if (currentPurchased !== 0) {
-      return { purchasedCredits: currentPurchased };
+  function matchesCurrent(
+    field: 'tokenCredits' | 'purchasedCredits',
+    current: number,
+  ): FilterQuery<IBalance> {
+    if (current !== 0) {
+      return { [field]: current };
     }
-    return { $or: [{ purchasedCredits: 0 }, { purchasedCredits: { $exists: false } }] };
+    return { $or: [{ [field]: 0 }, { [field]: { $exists: false } }] };
   }
 
   /**
@@ -267,7 +256,11 @@ export function createTransactionMethods(
       let currentBalanceDoc: IBalance | null;
       try {
         currentBalanceDoc = await Balance.findOne({ user }).lean<IBalance>();
-        const currentCredits = currentBalanceDoc ? currentBalanceDoc.tokenCredits : 0;
+        /** Both read through `?? 0`. Reading one that way and not the other let
+         *  a row missing `tokenCredits` produce a NaN that `applySpend` then
+         *  wrote to *both* buckets, erasing purchased credits along with the
+         *  grant. */
+        const currentCredits = currentBalanceDoc?.tokenCredits ?? 0;
         const currentPurchased = currentBalanceDoc?.purchasedCredits ?? 0;
 
         const { tokenCredits: newCredits, purchasedCredits: newPurchased } = applySpend(
@@ -284,10 +277,17 @@ export function createTransactionMethods(
           },
         };
 
-        let updatedBalance: IBalance | null = null;
         if (currentBalanceDoc) {
-          updatedBalance = await Balance.findOneAndUpdate(
-            { user, tokenCredits: currentCredits, ...purchasedMatches(currentPurchased) },
+          const updatedBalance = await Balance.findOneAndUpdate(
+            /** `$and` rather than spreading both clauses into one object: each
+             *  can be an `$or`, and the second would overwrite the first. */
+            {
+              user,
+              $and: [
+                matchesCurrent('tokenCredits', currentCredits),
+                matchesCurrent('purchasedCredits', currentPurchased),
+              ],
+            },
             updatePayload,
             { new: true },
           ).lean<IBalance>();
@@ -297,18 +297,23 @@ export function createTransactionMethods(
           }
           lastError = new Error(`Concurrency conflict for user ${user} on attempt ${attempt}.`);
         } else {
+          /**
+           * Insert, never upsert. An upsert on `{ user }` matches a row created
+           * between the read above and this write, and the payload is a `$set`
+           * of absolute values derived from a balance of zero — so a grant that
+           * landed in that window was overwritten with zero. Inserting instead
+           * fails with a duplicate key (the `user` index is unique for exactly
+           * this reason), and the retry re-reads and takes the compare-and-swap
+           * branch, which is the path that respects a concurrent write.
+           */
           try {
-            updatedBalance = await Balance.findOneAndUpdate({ user }, updatePayload, {
-              upsert: true,
-              new: true,
-            }).lean<IBalance>();
-
-            if (updatedBalance) {
-              return updatedBalance;
-            }
-            lastError = new Error(
-              `Upsert race condition suspected for user ${user} on attempt ${attempt}.`,
-            );
+            const created = await Balance.create({
+              user,
+              tokenCredits: newCredits,
+              purchasedCredits: newPurchased,
+              ...(setValues ?? {}),
+            });
+            return created.toObject() as IBalance;
           } catch (error: unknown) {
             if (
               error instanceof Error &&
@@ -393,7 +398,7 @@ export function createTransactionMethods(
     calculateTokenValue(transaction);
 
     await transaction.save();
-    if (!shouldDeduct(balance)) {
+    if (!isMeteringEnabled(balance)) {
       return;
     }
 
@@ -406,7 +411,7 @@ export function createTransactionMethods(
     return {
       rate: transaction.rate as number,
       user: transaction.user.toString() as string,
-      balance: balanceResponse.tokenCredits,
+      balance: spendableCredits(balanceResponse),
       [transaction.tokenType as string]: incrementValue,
     } as TransactionResult;
   }
@@ -431,7 +436,7 @@ export function createTransactionMethods(
 
     await transaction.save();
 
-    if (!shouldDeduct(balance)) {
+    if (!isMeteringEnabled(balance)) {
       return;
     }
 
@@ -445,7 +450,7 @@ export function createTransactionMethods(
     return {
       rate: transaction.rate as number,
       user: transaction.user.toString() as string,
-      balance: balanceResponse.tokenCredits,
+      balance: spendableCredits(balanceResponse),
       [transaction.tokenType as string]: incrementValue,
     } as TransactionResult;
   }

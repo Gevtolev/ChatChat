@@ -4,5 +4,7 @@ export * from './tempChatRetention';
 export * from './retention';
 export { tenantSafeBulkWrite } from './tenantBulkWrite';
 export * from './transactions';
+export * from './metering';
+export * from './credits';
 export * from './objectId';
 export * from './yaml';

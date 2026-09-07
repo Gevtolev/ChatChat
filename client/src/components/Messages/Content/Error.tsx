@@ -46,6 +46,11 @@ type TUpgradeRequiredQuota = {
   limit: number;
 };
 
+type TInsufficientCredits = {
+  remaining: number;
+  required: number;
+};
+
 type TGenericError = {
   info: string;
 };
@@ -132,6 +137,20 @@ const errorMessages = {
     }
     const { limit } = json;
     return localize('com_error_upgrade_required_quota', { 0: String(limit) });
+  },
+  insufficient_credits: (json: TInsufficientCredits, localize: LocalizeFunction) => {
+    const { remaining, required } = json;
+    /** A user at zero has nothing to compare against, and naming the price of
+     *  the message they cannot send reads as a taunt. Only somebody with credits
+     *  left is helped by the two numbers, because for them the shorter message
+     *  they were about to give up on would in fact go through. */
+    if (remaining > 0 && required > 0) {
+      return localize('com_error_insufficient_credits_partial', {
+        0: remaining.toLocaleString(),
+        1: required.toLocaleString(),
+      });
+    }
+    return localize('com_error_insufficient_credits');
   },
   token_balance: (json: TTokenBalance) => {
     const { balance, tokenCost, promptTokens, generations } = json;

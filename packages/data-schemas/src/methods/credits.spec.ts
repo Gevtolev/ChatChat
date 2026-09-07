@@ -27,6 +27,10 @@ beforeAll(async () => {
   if (!mongoose.models.Transaction) {
     mongoose.model('Transaction', transactionSchema);
   }
+  /** Index builds are asynchronous, and the concurrency cases below depend on
+   *  the unique `user` index existing — without it a racing insert succeeds and
+   *  silently splits the balance across two rows instead of erroring. */
+  await Balance.init();
   methods = createMethods(mongoose);
 });
 
@@ -35,7 +39,11 @@ afterAll(async () => {
   await mongoServer.stop();
 });
 
+/** Pinned rather than assumed. Every case below asserts that a spend *landed*,
+ *  which only holds while metering is on; an ambient `DISABLE_BILLING_GATING`
+ *  in the shell would turn the whole file red for a reason unrelated to it. */
 beforeEach(async () => {
+  delete process.env.DISABLE_BILLING_GATING;
   await Balance.deleteMany({});
 });
 
@@ -162,5 +170,104 @@ describe('spend order', () => {
 
     const row = await Balance.findOne({ user }).lean();
     expect(row?.tokenCredits).toBe(750_000);
+  });
+
+  /** `tokenCredits` reached `applySpend` without a `?? 0` while
+   *  `purchasedCredits` had one. A row missing it therefore produced a NaN that
+   *  was written to *both* fields, destroying purchased credits on a user whose
+   *  only sin was an oddly-shaped legacy row. */
+  it('does not turn a balance into NaN when tokenCredits is absent', async () => {
+    const user = userId();
+    await Balance.collection.insertOne({ user, purchasedCredits: 500_000 });
+
+    await methods.createTransaction({
+      user: user.toString(),
+      conversationId: 'c1',
+      model: RATE_1_MODEL,
+      tokenType: 'prompt',
+      endpointTokenConfig: RATE_1_CONFIG,
+      rawAmount: -100_000,
+    });
+
+    const row = await Balance.findOne({ user }).lean();
+    expect(row?.tokenCredits).toBe(0);
+    expect(row?.purchasedCredits).toBe(400_000);
+  });
+
+  /** Upstream's balance system can leave `tokenCredits` negative. Spending then
+   *  charged the purchased bucket for the spend *plus* the overdraft, because
+   *  `Math.min(granted, spend)` was itself negative — the user paid twice for
+   *  someone else's arithmetic. */
+  it('does not charge purchased credits for a negative grant', async () => {
+    const user = userId();
+    await Balance.create({ user, tokenCredits: -100_000, purchasedCredits: 500_000 });
+
+    await methods.createTransaction({
+      user: user.toString(),
+      conversationId: 'c1',
+      model: RATE_1_MODEL,
+      tokenType: 'prompt',
+      endpointTokenConfig: RATE_1_CONFIG,
+      rawAmount: -50_000,
+    });
+
+    const row = await Balance.findOne({ user }).lean();
+    expect(row?.tokenCredits).toBe(0);
+    expect(row?.purchasedCredits).toBe(450_000);
+  });
+
+  /** The debug line `spendTokens` writes after every generation is the only
+   *  standing record of what a user had left; reporting the granted half alone
+   *  understates it by whatever they bought. */
+  it('reports both buckets as the resulting balance', async () => {
+    const user = userId();
+    await Balance.create({ user, tokenCredits: 300_000, purchasedCredits: 700_000 });
+
+    const result = await methods.createTransaction({
+      user: user.toString(),
+      conversationId: 'c1',
+      model: RATE_1_MODEL,
+      tokenType: 'prompt',
+      endpointTokenConfig: RATE_1_CONFIG,
+      rawAmount: -100_000,
+    });
+
+    expect(result?.balance).toBe(900_000);
+  });
+});
+
+describe('concurrent writes', () => {
+  /** `updateBalance` used to upsert on `{ user }` when its read found no row,
+   *  `$set`ting absolute values derived from a balance of zero. A grant landing
+   *  in that window was overwritten with the result of spending against
+   *  nothing. Inserting instead makes the collision a duplicate-key error, and
+   *  the retry re-reads and compares-and-swaps. */
+  it('does not overwrite a balance created between the read and the write', async () => {
+    const user = userId();
+    await Balance.create({ user, tokenCredits: 0, purchasedCredits: 1_000_000 });
+
+    /** The interleaving is forced rather than raced. Two real concurrent
+     *  operations do not reproduce it reliably — the grant simply wins, and the
+     *  window never opens — so racing them would give a test that passes
+     *  against the defect. Here the read misses while the row demonstrably
+     *  exists, which is exactly the state the old upsert wrote through. */
+    jest
+      .spyOn(Balance, 'findOne')
+      .mockImplementationOnce(() => ({ lean: async () => null }) as never);
+
+    await methods.updateBalance({ user: user.toString(), incrementValue: -100_000 });
+
+    const row = await Balance.findOne({ user }).lean();
+    expect(row?.purchasedCredits).toBe(900_000);
+  });
+
+  it('keeps exactly one balance row per user', async () => {
+    const user = userId();
+    await Promise.all(
+      Array.from({ length: 5 }, () =>
+        methods.updateBalance({ user: user.toString(), incrementValue: 1_000 }),
+      ),
+    );
+    expect(await Balance.countDocuments({ user })).toBe(1);
   });
 });

@@ -18,6 +18,7 @@
     "set-balance": "node config/set-balance.js",
     "list-balances": "node config/list-balances.js",
     "set-plan": "node config/set-plan.js",
+    "grant-credits": "node config/grant-credits.js",
     "set-role": "node config/set-role.js",
     "user-stats": "node config/user-stats.js",
     "rebuild:package-lock": "node config/packages",

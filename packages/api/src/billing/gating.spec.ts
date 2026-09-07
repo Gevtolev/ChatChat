@@ -1,6 +1,8 @@
 import mongoose from 'mongoose';
 import { MongoMemoryServer } from 'mongodb-memory-server';
+import { CREDIT_DISPLAY_DIVISOR } from 'librechat-data-provider';
 import { createModels, createMethods } from '@librechat/data-schemas';
+import { matchModelName, findMatchingPattern } from '~/utils/tokens';
 import { applyPlanChange } from './applyPlanChange';
 import { checkBillingAccess } from './gating';
 import { buildGatingDeps } from './deps';
@@ -32,6 +34,23 @@ function buildApplyDeps() {
     grantMonthlyCredits: m.grantMonthlyCredits,
   };
 }
+
+/**
+ * The real matchers, adapted to what `createMethods` declares — `api/models`
+ * wires these same two functions in untyped JavaScript, so the shapes have
+ * never had to line up. Re-implementing them here instead would test a copy;
+ * the premium-rate band depends on which key the model name resolves to, which
+ * is the whole thing being asserted.
+ */
+const nameMatchers = {
+  matchModelName: (model: string): string | undefined => matchModelName(model),
+  /** The map is only ever read for its keys, so narrowing it is safe. */
+  findMatchingPattern: (
+    model: string,
+    values: Record<string, number | Record<string, number>>,
+  ): string | undefined =>
+    findMatchingPattern(model, values as Record<string, number>) ?? undefined,
+};
 
 /**
  * The production factory, not a local copy. A hand-built deps object here is
@@ -94,7 +113,7 @@ describe('checkBillingAccess — model tier gating', () => {
 
     await expectDenied(
       checkBillingAccess({ userId, modelId: 'gpt-5.4-nano' }, gatingDeps()),
-      'upgrade_required_quota',
+      'insufficient_credits',
     );
   });
 
@@ -140,7 +159,7 @@ describe('checkBillingAccess — model tier gating', () => {
      *  genuine outage. */
     await expectDenied(
       checkBillingAccess({ userId, modelId: 'gpt-5.4-nano' }, deps),
-      'upgrade_required_quota',
+      'insufficient_credits',
     );
   });
 
@@ -178,8 +197,52 @@ describe('checkBillingAccess — model tier gating', () => {
           },
           gatingDeps(),
         ),
-        'upgrade_required_quota',
+        'insufficient_credits',
       );
+    });
+
+    /** Above 200k input tokens `gemini-3.1` costs 4 per prompt token instead of
+     *  2. Pricing that band needs `inputTokenCount`, and the estimate omitted
+     *  it — so the check under-priced by half on exactly the calls it exists to
+     *  refuse, the largest ones. Needs the real name matchers, which
+     *  `createMethods(mongoose)` stubs out. */
+    test('prices a long prompt at the premium rate', async () => {
+      expect.assertions(2);
+      const userId = await fundedUser(700_000);
+      const deps = buildGatingDeps(createMethods(mongoose, nameMatchers));
+
+      await expectDenied(
+        checkBillingAccess(
+          { userId, modelId: 'gemini-3.1-pro-preview', promptTokens: 250_000 },
+          deps,
+        ),
+        'insufficient_credits',
+      );
+    });
+
+    test('reports the shortfall in display credits, not internal cost units', async () => {
+      /** The only unit the user has ever been shown. Reporting raw
+       *  `tokenCredits` would put a number on screen that matches nothing in
+       *  the product — the old wording quoted 14,950,000 and called them
+       *  "messages". */
+      const userId = await fundedUser(14_950);
+
+      let caught: unknown;
+      try {
+        await checkBillingAccess(
+          { userId, modelId: 'gpt-5.4-nano', promptTokens: 500_000, endpointTokenConfig: RATE_1 },
+          gatingDeps(),
+        );
+      } catch (err) {
+        caught = err;
+      }
+
+      const payload: { code: string; remaining: number; required: number } = JSON.parse(
+        (caught as Error).message,
+      );
+      expect(payload.code).toBe('insufficient_credits');
+      expect(payload.remaining).toBe(1_000);
+      expect(payload.required).toBe(Math.ceil(500_000 / CREDIT_DISPLAY_DIVISOR));
     });
 
     test('allows a call the balance covers', async () => {
@@ -323,8 +386,11 @@ describe('checkBillingAccess — payload shape', () => {
 
   test('upgrade_required_quota error includes used and limit', async () => {
     const userId = new mongoose.Types.ObjectId();
-    /** Anonymous is the message-counted plan, so its payload carries the
-     *  message cap; credit-metered plans report their credit grant instead. */
+    /** Anonymous is the only message-counted plan, and this payload is only
+     *  ever about messages. A credit-metered plan denies with
+     *  `insufficient_credits` and a credit count — reusing this code told a
+     *  paying customer they had run out of *messages*, quoting their credit
+     *  grant as the number. */
     await applyPlanChange(
       { user_id: userId, plan_code: 'anonymous', source: 'system_default' },
       buildApplyDeps(),
@@ -412,7 +478,7 @@ describe('checkBillingAccess — balance-driven quota', () => {
 
     await expectDenied(
       checkBillingAccess({ userId, modelId: 'gpt-5.4-mini' }, deps),
-      'upgrade_required_quota',
+      'insufficient_credits',
     );
   });
 
@@ -493,7 +559,7 @@ describe('checkBillingAccess — monthly grant renewal', () => {
 
     await expectDenied(
       checkBillingAccess({ userId, modelId: 'gpt-5.5' }, gatingDeps()),
-      'upgrade_required_quota',
+      'insufficient_credits',
     );
     expect((await balanceOf(userId)).tokenCredits).toBe(0);
   });

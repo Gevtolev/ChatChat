@@ -1,3 +1,4 @@
+import { spendableCredits } from '~/utils/credits';
 import type { FilterQuery, Model, UpdateQuery } from 'mongoose';
 import type { IQuota, IQuotaLean } from '~/types/quota';
 import type { Types } from 'mongoose';
@@ -113,10 +114,7 @@ export function createQuotaMethods(mongoose: typeof import('mongoose')) {
     const doc = await Balance.findOne({ user: userId })
       .select('tokenCredits purchasedCredits')
       .lean();
-    /** Spendable means both buckets. The gate refuses at <= 0, so counting only
-     *  the granted half would lock out a user who had just bought credits — and
-     *  `spendTokens` would have drawn on them regardless. */
-    return doc == null ? null : (doc.tokenCredits ?? 0) + (doc.purchasedCredits ?? 0);
+    return doc == null ? null : spendableCredits(doc);
   }
 
   /**
@@ -168,7 +166,7 @@ export function createQuotaMethods(mongoose: typeof import('mongoose')) {
     ).lean();
 
     if (updated != null) {
-      return ((updated.tokenCredits as number) ?? 0) + ((updated.purchasedCredits as number) ?? 0);
+      return spendableCredits(updated as { tokenCredits?: number; purchasedCredits?: number });
     }
     /** No row, or auto-refill was never armed — fall back to a plain read so a
      *  manually-created balance is still honoured. */

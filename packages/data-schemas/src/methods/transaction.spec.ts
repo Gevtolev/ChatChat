@@ -85,9 +85,11 @@ beforeEach(async () => {
   await mongoose.connection.dropDatabase();
 });
 
-/** These specs set `DISABLE_BILLING_GATING` per-case; leaking it would silently
- *  disable metering for every case that runs after. */
-afterEach(() => {
+/** Cleared before each case, not after. These specs set the flag per-case, so
+ *  clearing afterwards stops it leaking forwards — but the cases that assert a
+ *  deduction *landed* also need it absent to begin with, and an ambient value
+ *  in the shell would otherwise turn them red for an unrelated reason. */
+beforeEach(() => {
   delete process.env.DISABLE_BILLING_GATING;
 });
 

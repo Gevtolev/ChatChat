@@ -14,6 +14,13 @@ import {
   priorRunOutputTokens,
 } from './usage';
 
+/** Metering keys off `DISABLE_BILLING_GATING`; cleared before each case so a
+ *  case that sets it cannot leak forwards and a case asserting a charge landed
+ *  cannot inherit an ambient value from the shell. */
+beforeEach(() => {
+  delete process.env.DISABLE_BILLING_GATING;
+});
+
 describe('recordCollectedUsage', () => {
   let mockSpendTokens: jest.Mock;
   let mockSpendStructuredTokens: jest.Mock;
@@ -1154,7 +1161,28 @@ describe('recordCollectedUsage', () => {
       );
     });
 
-    it('should not call updateBalance when balance is disabled', async () => {
+    /** Upstream's `balance.enabled` no longer decides this alone. It switches on
+     *  upstream's entire balance feature, which this fork does not run, so
+     *  deduction is keyed to `DISABLE_BILLING_GATING` — the same switch the gate
+     *  reads. This path is the one the agents endpoint always takes, and leaving
+     *  it on the old flag is what billed nobody for 1,032 generations. */
+    it('still calls updateBalance when upstream balance flag is off', async () => {
+      const collectedUsage: UsageMetadata[] = [
+        { input_tokens: 100, output_tokens: 50, model: 'gpt-4' },
+      ];
+
+      await recordCollectedUsage(bulkDeps, {
+        ...baseParams,
+        balance: { enabled: false },
+        collectedUsage,
+      });
+
+      expect(mockInsertMany).toHaveBeenCalledTimes(1);
+      expect(mockUpdateBalance).toHaveBeenCalledTimes(1);
+    });
+
+    it('should not call updateBalance when billing gating is disabled', async () => {
+      process.env.DISABLE_BILLING_GATING = 'true';
       const collectedUsage: UsageMetadata[] = [
         { input_tokens: 100, output_tokens: 50, model: 'gpt-4' },
       ];
