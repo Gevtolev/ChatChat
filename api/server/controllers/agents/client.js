@@ -21,6 +21,8 @@ const {
   applyContextToAgent,
   isMemoryAgentEnabled,
   recordCollectedUsage,
+  buildRunErrorText,
+  producedUsableOutput,
   GenerationJobManager,
   getTransactionsConfig,
   resolveRecursionLimit,
@@ -947,6 +949,40 @@ class AgentClient extends BaseClient {
    * @param {AppConfig['transactions']} [params.transactions]
    * @param {UsageMetadata[]} [params.collectedUsage=this.collectedUsage]
    */
+  /**
+   * Whether this turn should be billed.
+   *
+   * Two reasons not to, and they are different:
+   *
+   * `aborted` — the user pressed stop, and `abortMiddleware` bills the partial
+   * turn itself. Charging here as well would double-bill it.
+   *
+   * `failedWithoutOutput` — the provider rejected the turn before producing
+   * anything, so it cost us nothing and gave the user nothing. Billing it
+   * charges them for our outage: two upstream 401s took 69,257 credits off one
+   * account in twelve seconds, while the balance those 401s were about was
+   * ours, not theirs. A turn that streamed real output and *then* failed did
+   * consume capacity we pay for, and is deliberately still billable.
+   *
+   * @param {boolean | undefined} wasAborted
+   * @returns {boolean}
+   */
+  shouldRecordUsage(wasAborted) {
+    if (wasAborted === true) {
+      logger.debug(
+        '[api/server/controllers/agents/client.js #chatCompletion] Skipping token spending - handled by abort middleware',
+      );
+      return false;
+    }
+    if (this.failedWithoutOutput === true) {
+      logger.warn(
+        '[api/server/controllers/agents/client.js #chatCompletion] Not spending tokens - the run produced no output',
+      );
+      return false;
+    }
+    return true;
+  }
+
   async recordCollectedUsage({
     model,
     balance,
@@ -1011,6 +1047,9 @@ class AgentClient extends BaseClient {
     const appConfig = this.options.req.config;
     const balanceConfig = getBalanceConfig(appConfig);
     const transactionsConfig = getTransactionsConfig(appConfig);
+    /** Reset per run: a value left over from a previous turn on a reused client
+     *  would silently stop billing every turn after the first failure. */
+    this.failedWithoutOutput = false;
     try {
       if (!abortController) {
         abortController = new AbortController();
@@ -1302,9 +1341,12 @@ class AgentClient extends BaseClient {
           '[api/server/controllers/agents/client.js #sendCompletion] Unhandled error type',
           err,
         );
+        /** Checked before the error part is appended, or it would count as
+         *  output and every failed turn would look billable. */
+        this.failedWithoutOutput = !producedUsableOutput(this.contentParts);
         this.contentParts.push({
           type: ContentTypes.ERROR,
-          [ContentTypes.ERROR]: `An error occurred while processing the request${err?.message ? `: ${err.message}` : ''}`,
+          [ContentTypes.ERROR]: buildRunErrorText(err),
         });
       }
     } finally {
@@ -1330,17 +1372,12 @@ class AgentClient extends BaseClient {
 
         /** Skip token spending if aborted - the abort handler (abortMiddleware.js) handles it
         This prevents double-spending when user aborts via `/api/agents/chat/abort` */
-        const wasAborted = abortController?.signal?.aborted;
-        if (!wasAborted) {
+        if (this.shouldRecordUsage(abortController?.signal?.aborted)) {
           await this.recordCollectedUsage({
             context: 'message',
             balance: balanceConfig,
             transactions: transactionsConfig,
           });
-        } else {
-          logger.debug(
-            '[api/server/controllers/agents/client.js #chatCompletion] Skipping token spending - handled by abort middleware',
-          );
         }
       } catch (err) {
         logger.error(
