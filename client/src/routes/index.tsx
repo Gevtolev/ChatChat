@@ -65,6 +65,11 @@ const loadBookmarkWorkspace = () =>
     Component: m.BookmarkWorkspace,
   }));
 
+/** Lazy so a legal document — which most sessions never open — stays out of the
+ *  main bundle. */
+const loadTerms = () => import('~/components/Legal').then((m) => ({ Component: m.Terms }));
+const loadPrivacy = () => import('~/components/Legal').then((m) => ({ Component: m.Privacy }));
+
 const loadAdminUsageView = () =>
   import('~/components/Admin/Usage/UsagePanel').then((m) => ({ Component: m.default }));
 
@@ -76,6 +81,18 @@ export const router = createBrowserRouter(
     {
       path: 'share/:shareId',
       element: <ShareRoute />,
+      errorElement: <RouteErrorBoundary />,
+    },
+    /** Public and outside every auth layout: someone has to be able to read the
+     *  terms before agreeing to them, and that reader has no account yet. */
+    {
+      path: 'terms',
+      lazy: loadTerms,
+      errorElement: <RouteErrorBoundary />,
+    },
+    {
+      path: 'privacy',
+      lazy: loadPrivacy,
       errorElement: <RouteErrorBoundary />,
     },
     {

@@ -304,6 +304,26 @@ export default [
     },
   },
   {
+    /**
+     * The legal documents are English-only by design, so `no-literal-string`
+     * cannot apply to them.
+     *
+     * Every other user-facing string goes through `useLocalize()` and gets
+     * machine-translated into the other locale files. A translated Terms of
+     * Service is not a translation — it is a second contract, and one produced
+     * by that pipeline would be a liability rather than a courtesy. Publishing
+     * a jurisdiction-specific document needs someone qualified in that
+     * jurisdiction.
+     *
+     * The chrome around the documents — title, back link, the unfinished
+     * banner — is localized normally in `Layout.tsx`.
+     */
+    files: ['./client/src/components/Legal/**/*.tsx'],
+    rules: {
+      'i18next/no-literal-string': 'off',
+    },
+  },
+  {
     files: ['./config/translations/**/*.ts'],
     languageOptions: {
       parser: tsParser,

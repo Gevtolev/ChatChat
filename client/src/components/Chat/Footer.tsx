@@ -8,17 +8,19 @@ function Footer({ className }: { className?: string }) {
   const { data: config } = useGetStartupConfig();
   const localize = useLocalize();
 
-  const privacyPolicy = config?.interface?.privacyPolicy;
-  const termsOfService = config?.interface?.termsOfService;
+  /** Falls back to the pages this fork ships. See `Auth/Footer.tsx` — the
+   *  config these used to require lives outside git. */
+  const privacyHref = config?.interface?.privacyPolicy?.externalUrl ?? '/privacy';
+  const termsHref = config?.interface?.termsOfService?.externalUrl ?? '/terms';
 
-  const privacyPolicyRender = privacyPolicy?.externalUrl != null && (
-    <a className="text-text-secondary underline" href={privacyPolicy.externalUrl} rel="noreferrer">
+  const privacyPolicyRender = (
+    <a className="text-text-secondary underline" href={privacyHref} rel="noreferrer">
       {localize('com_ui_privacy_policy')}
     </a>
   );
 
-  const termsOfServiceRender = termsOfService?.externalUrl != null && (
-    <a className="text-text-secondary underline" href={termsOfService.externalUrl} rel="noreferrer">
+  const termsOfServiceRender = (
+    <a className="text-text-secondary underline" href={termsHref} rel="noreferrer">
       {localize('com_ui_terms_of_service')}
     </a>
   );
