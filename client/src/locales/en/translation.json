@@ -383,6 +383,7 @@
   "com_error_moderation": "It appears that the content submitted has been flagged by our moderation system for not aligning with our community guidelines. We're unable to proceed with this specific topic. If you have any other questions or topics you'd like to explore, please edit your message, or create a new conversation.",
   "com_error_no_base_url": "No base URL found. Please provide one and try again.",
   "com_error_no_user_key": "No key found. Please provide a key and try again.",
+  "com_error_provider_unavailable": "The AI provider is temporarily unavailable, so this message couldn't be sent. This is a problem on our side — your account and credits are unaffected. Please try again shortly.",
   "com_error_refusal": "Response refused by safety filters. Rewrite your message and try again. If you encounter this frequently while using Claude Sonnet 4.5 or Opus 4.1, you can try Sonnet 4, which has different usage restrictions.",
   "com_error_stream_expired": "The response stream has expired or already completed. Please try again.",
   "com_error_upgrade_required_model": "This model requires a {{0}} plan. Please upgrade to continue.",

@@ -6,6 +6,7 @@ export * from './config';
 export * from './context';
 export * from './discovery';
 export * from './edges';
+export * from './errors';
 export * from './handlers';
 export * from './initialize';
 export * from './legacy';

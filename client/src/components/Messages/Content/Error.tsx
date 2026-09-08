@@ -138,6 +138,13 @@ const errorMessages = {
     const { limit } = json;
     return localize('com_error_upgrade_required_quota', { 0: String(limit) });
   },
+  /** Emitted when an upstream model provider rejects *our* credentials or
+   *  billing. Deliberately says nothing about the user's own balance: the
+   *  provider's own wording for this ("Balance is insufficient") used to be
+   *  appended verbatim, which told a user with 42 million credits that their
+   *  allowance had run out, in our own product's vocabulary for it. */
+  provider_unavailable: (_json: unknown, localize: LocalizeFunction) =>
+    localize('com_error_provider_unavailable'),
   insufficient_credits: (json: TInsufficientCredits, localize: LocalizeFunction) => {
     const { remaining, required } = json;
     /** A user at zero has nothing to compare against, and naming the price of
