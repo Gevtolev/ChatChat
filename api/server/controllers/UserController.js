@@ -351,6 +351,10 @@ const deleteUserController = async (req, res) => {
     await db.deleteTransactions({ user: user.id });
     await db.deleteUserKey({ userId: user.id, all: true });
     await db.deleteBalances({ user: user._id });
+    /** Subscription and Quota arrived with plan gating, after this list was
+     *  written, and were never added to it — so an account deleted on the
+     *  promise that all its data was gone left its plan record behind. */
+    await db.deleteBillingRecords(user._id);
     await db.deletePresets(user.id);
     try {
       await db.deleteConvos(user.id);

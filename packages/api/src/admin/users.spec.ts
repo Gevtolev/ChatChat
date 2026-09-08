@@ -58,6 +58,7 @@ function createDeps(overrides: Partial<AdminUsersDeps> = {}): AdminUsersDeps {
       .mockResolvedValue({ deletedCount: 1, message: 'User was deleted successfully.' }),
     deleteConfig: jest.fn().mockResolvedValue(null),
     deleteAclEntries: jest.fn().mockResolvedValue(undefined),
+    deleteBillingRecords: jest.fn().mockResolvedValue({ subscriptions: 1, quotas: 1 }),
     ...overrides,
   };
 }
@@ -416,7 +417,7 @@ describe('createAdminUsersHandlers', () => {
       expect(deps.countUsers).not.toHaveBeenCalled();
     });
 
-    it('cascades cleanup of Config and AclEntries', async () => {
+    it('cascades cleanup of Config, AclEntries and billing records', async () => {
       const result: UserDeleteResult = {
         deletedCount: 1,
         message: 'User was deleted successfully.',
@@ -433,6 +434,11 @@ describe('createAdminUsersHandlers', () => {
         principalType: PrincipalType.USER,
         principalId: expect.any(Types.ObjectId),
       });
+      /** Subscription and Quota are this fork's tables — upstream has no idea
+       *  they exist, so their absence from this cascade was ours to fix. The
+       *  wider gap it sits in (conversations, messages, files) is upstream's
+       *  own call and deliberately left alone. */
+      expect(deps.deleteBillingRecords).toHaveBeenCalledWith(expect.any(Types.ObjectId));
     });
 
     it('returns success even when cascade cleanup partially fails', async () => {

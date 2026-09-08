@@ -21,7 +21,6 @@ const db = {
   expireActiveSubscriptions: jest.fn(),
   grantMonthlyCredits: jest.fn(),
   createSubscription: jest.fn(),
-  createQuota: jest.fn(),
   getMultiplier: jest.fn(),
   findBalanceByUser: jest.fn(),
 } as unknown as BillingDbMethods;
@@ -60,7 +59,6 @@ describe('buildPlanChangeDeps', () => {
     'expireActiveSubscriptions',
     'grantMonthlyCredits',
     'createSubscription',
-    'createQuota',
   ];
 
   test('supplies every key PlanChangeDeps declares', () => {

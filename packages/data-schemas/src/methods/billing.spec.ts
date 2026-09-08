@@ -9,6 +9,7 @@ import type { IAuditLog } from '~/types/auditLog';
 import { createSubscriptionMethods } from './subscription';
 import { createQuotaMethods } from './quota';
 import { createAuditLogMethods } from './auditLog';
+import { createBillingMethods } from './billing';
 
 let mongoServer: MongoMemoryServer;
 let Subscription: mongoose.Model<ISubscription>;
@@ -18,6 +19,7 @@ let AuditLog: mongoose.Model<IAuditLog>;
 let subscriptionMethods: ReturnType<typeof createSubscriptionMethods>;
 let quotaMethods: ReturnType<typeof createQuotaMethods>;
 let auditLogMethods: ReturnType<typeof createAuditLogMethods>;
+let billingMethods: ReturnType<typeof createBillingMethods>;
 
 beforeAll(async () => {
   mongoServer = await MongoMemoryServer.create();
@@ -32,6 +34,7 @@ beforeAll(async () => {
   subscriptionMethods = createSubscriptionMethods(mongoose);
   quotaMethods = createQuotaMethods(mongoose);
   auditLogMethods = createAuditLogMethods(mongoose);
+  billingMethods = createBillingMethods(mongoose);
 });
 
 afterAll(async () => {
@@ -358,9 +361,10 @@ describe('billing methods', () => {
     test('resetQuota sets messages_used to 0', async () => {
       const uid = new mongoose.Types.ObjectId();
       const ps = new Date('2026-06-01T00:00:00Z');
-      await quotaMethods.createQuota({ userId: uid, periodStart: ps });
+      /** Written directly: `createQuota` is gone. It had one caller,
+       *  `applyPlanChange`, writing a row nothing ever read. */
+      await Quota.create({ user_id: uid, period_start: ps, messages_used: 5 });
 
-      await Quota.updateOne({ user_id: uid, period_start: ps }, { $set: { messages_used: 5 } });
       const reset = await quotaMethods.resetQuota({ userId: uid, periodStart: ps });
       expect(reset).not.toBeNull();
       expect(reset!.messages_used).toBe(0);
@@ -420,6 +424,76 @@ describe('billing methods', () => {
 
       const inDb = await AuditLog.findById(result._id).lean();
       expect(inDb!.payload).toMatchObject(payload);
+    });
+  });
+
+  describe('deleteBillingRecords', () => {
+    /**
+     * The omission this exists for: `Subscription` and `Quota` arrived with plan
+     * gating and were never added to any of the three deletion paths. A user
+     * could delete their account, be told every trace was gone, and leave their
+     * plan record behind — and `config/backfill-plan-credits.js`, which scans
+     * active subscriptions, would then grant the deleted account a fresh
+     * balance.
+     */
+    test('removes both collections for the user', async () => {
+      const uid = new mongoose.Types.ObjectId();
+      await subscriptionMethods.createSubscription({
+        userId: uid,
+        planCode: 'plus',
+        status: 'active',
+        source: 'admin',
+        periodStart: new Date(),
+        periodEnd: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+      });
+      await Quota.create({ user_id: uid, period_start: new Date(0), messages_used: 3 });
+
+      const result = await billingMethods.deleteBillingRecords(uid);
+
+      expect(result).toEqual({ subscriptions: 1, quotas: 1 });
+      expect(await Subscription.countDocuments({ user_id: uid })).toBe(0);
+      expect(await Quota.countDocuments({ user_id: uid })).toBe(0);
+    });
+
+    test('leaves other users alone', async () => {
+      const target = new mongoose.Types.ObjectId();
+      const bystander = new mongoose.Types.ObjectId();
+      for (const uid of [target, bystander]) {
+        await subscriptionMethods.createSubscription({
+          userId: uid,
+          planCode: 'plus',
+          status: 'active',
+          source: 'admin',
+          periodStart: new Date(),
+          periodEnd: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+        });
+        await Quota.create({ user_id: uid, period_start: new Date(0), messages_used: 1 });
+      }
+
+      await billingMethods.deleteBillingRecords(target);
+
+      expect(await Subscription.countDocuments({ user_id: bystander })).toBe(1);
+      expect(await Quota.countDocuments({ user_id: bystander })).toBe(1);
+    });
+
+    /** Every deletion path calls this unconditionally, and most accounts have
+     *  no quota row at all — throwing on "nothing to delete" would fail the
+     *  whole account deletion. */
+    test('reports zero rather than throwing when there is nothing to delete', async () => {
+      const result = await billingMethods.deleteBillingRecords(new mongoose.Types.ObjectId());
+      expect(result).toEqual({ subscriptions: 0, quotas: 0 });
+    });
+
+    /** Callers hold the id in both shapes: `deleteUserController` passes
+     *  `user._id`, the admin handler a re-parsed ObjectId, and Express params
+     *  arrive as strings. */
+    test('accepts the id as a string', async () => {
+      const uid = new mongoose.Types.ObjectId();
+      await Quota.create({ user_id: uid, period_start: new Date(0), messages_used: 1 });
+
+      const result = await billingMethods.deleteBillingRecords(uid.toString());
+
+      expect(result.quotas).toBe(1);
     });
   });
 });

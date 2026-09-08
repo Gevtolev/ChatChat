@@ -54,6 +54,21 @@ const subscriptionSchema = new Schema<ISubscription>(
       type: Date,
       default: Date.now,
     },
+    /**
+     * Written only for the anonymous trial, whose owning `User` is itself
+     * TTL-bound. MongoDB's TTL monitor removes the row it is set on and nothing
+     * else — it does not cascade — so a subscription pointing at a
+     * TTL-collected anonymous user used to survive it forever. Production had
+     * 110 such rows.
+     *
+     * `expires: 0` means "expire at the instant this field holds", rather than
+     * a fixed interval after it. Absent on every other row, and a document
+     * without the field is never expired, so paid subscriptions are untouched.
+     */
+    expiresAt: {
+      type: Date,
+      expires: 0,
+    },
   },
   { timestamps: false },
 );

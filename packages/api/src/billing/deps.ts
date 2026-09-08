@@ -43,6 +43,5 @@ export function buildPlanChangeDeps(db: BillingDbMethods): PlanChangeDeps {
     expireActiveSubscriptions: db.expireActiveSubscriptions,
     grantMonthlyCredits: db.grantMonthlyCredits,
     createSubscription: db.createSubscription,
-    createQuota: db.createQuota,
   };
 }

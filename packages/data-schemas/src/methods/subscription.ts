@@ -44,6 +44,9 @@ export function createSubscriptionMethods(mongoose: typeof import('mongoose')) {
     externalRef?: string | null;
     grantedBy?: Types.ObjectId | null;
     metadata?: Record<string, string>;
+    /** Only set for the anonymous trial, so MongoDB's TTL collects the row
+     *  alongside the user it belongs to. Omitted means "never expires". */
+    expiresAt?: Date;
   }): Promise<ISubscriptionLean> {
     const Subscription = mongoose.models.Subscription as Model<ISubscription>;
     const now = new Date();
@@ -59,6 +62,9 @@ export function createSubscriptionMethods(mongoose: typeof import('mongoose')) {
       metadata: args.metadata ?? {},
       created_at: now,
       updated_at: now,
+      /** Spread rather than assigned: writing `undefined` would still create
+       *  the field, and a null-valued `expiresAt` is not what "no TTL" means. */
+      ...(args.expiresAt != null && { expiresAt: args.expiresAt }),
     });
     return doc.toObject() as ISubscriptionLean;
   }

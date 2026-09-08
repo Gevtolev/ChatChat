@@ -21,13 +21,11 @@ jest.mock('~/server/services/Config', () => ({
 }));
 
 const mockCreateUser = jest.fn();
-const mockCreateQuota = jest.fn();
 const mockCreateSubscription = jest.fn();
 const mockExpireActiveSubscriptions = jest.fn();
 const mockGetActiveSubscriptionRecord = jest.fn();
 jest.mock('~/models', () => ({
   createUser: (...args) => mockCreateUser(...args),
-  createQuota: (...args) => mockCreateQuota(...args),
   createSubscription: (...args) => mockCreateSubscription(...args),
   expireActiveSubscriptions: (...args) => mockExpireActiveSubscriptions(...args),
   getActiveSubscriptionRecord: (...args) => mockGetActiveSubscriptionRecord(...args),

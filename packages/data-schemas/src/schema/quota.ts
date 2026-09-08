@@ -25,6 +25,20 @@ const quotaSchema = new Schema<IQuota>(
       type: Date,
       default: Date.now,
     },
+    /**
+     * Written only for the anonymous trial, whose owning `User` is itself
+     * TTL-bound. See `subscriptionSchema` for why this cannot be inferred from
+     * the user — MongoDB's TTL does not cascade.
+     *
+     * Not unconditional even though the anonymous plan is currently the only
+     * one with a `lifetime_message_limit`: this row *is* the abuse counter, and
+     * expiring one that belongs to a future paid plan would hand that user a
+     * fresh allowance every week.
+     */
+    expiresAt: {
+      type: Date,
+      expires: 0,
+    },
   },
   { timestamps: false },
 );

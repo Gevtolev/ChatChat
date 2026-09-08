@@ -2,6 +2,7 @@ import mongoose from 'mongoose';
 import { MongoMemoryServer } from 'mongodb-memory-server';
 import { CREDIT_DISPLAY_DIVISOR } from 'librechat-data-provider';
 import { createModels, createMethods } from '@librechat/data-schemas';
+import type { IQuotaLean } from '@librechat/data-schemas';
 import { matchModelName, findMatchingPattern } from '~/utils/tokens';
 import { applyPlanChange } from './applyPlanChange';
 import { checkBillingAccess } from './gating';
@@ -30,7 +31,6 @@ function buildApplyDeps() {
     getActiveSubscriptionRecord: m.getActiveSubscriptionRecord,
     expireActiveSubscriptions: m.expireActiveSubscriptions,
     createSubscription: m.createSubscription,
-    createQuota: m.createQuota,
     grantMonthlyCredits: m.grantMonthlyCredits,
   };
 }
@@ -453,6 +453,46 @@ describe('checkBillingAccess — the anonymous trial is not credit-metered', () 
       { ...gatingDeps(), refreshMonthlyGrant },
     );
     expect(refreshMonthlyGrant).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The trial counter belongs to a `User` that MongoDB collects after 7 days,
+   * and TTL does not cascade — so the counter carries its own expiry. Set a day
+   * later than the user's, never earlier: a counter that vanished first would
+   * hand a visitor still inside their trial three more messages.
+   */
+  test('the anonymous counter expires, a day after its user would', async () => {
+    const userId = new mongoose.Types.ObjectId();
+    await applyPlanChange(
+      { user_id: userId, plan_code: 'anonymous', source: 'system_default' },
+      buildApplyDeps(),
+    );
+
+    await checkBillingAccess({ userId, modelId: 'gpt-5.4-mini' }, gatingDeps());
+
+    const row = await mongoose.models.Quota.findOne({ user_id: userId }).lean<IQuotaLean>();
+    const USER_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+    expect(row?.expiresAt).toBeInstanceOf(Date);
+    expect(row!.expiresAt!.getTime()).toBeGreaterThan(Date.now() + USER_TTL_MS);
+  });
+
+  /** `$setOnInsert`, so message two does not push the expiry a day further out
+   *  each time — the trial would then outlive its own user indefinitely. */
+  test('a second message does not extend the counter expiry', async () => {
+    const userId = new mongoose.Types.ObjectId();
+    await applyPlanChange(
+      { user_id: userId, plan_code: 'anonymous', source: 'system_default' },
+      buildApplyDeps(),
+    );
+    const deps = gatingDeps();
+
+    await checkBillingAccess({ userId, modelId: 'gpt-5.4-mini' }, deps);
+    const first = await mongoose.models.Quota.findOne({ user_id: userId }).lean<IQuotaLean>();
+    await checkBillingAccess({ userId, modelId: 'gpt-5.4-mini' }, deps);
+    const second = await mongoose.models.Quota.findOne({ user_id: userId }).lean<IQuotaLean>();
+
+    expect(second!.messages_used).toBe(2);
+    expect(second!.expiresAt!.getTime()).toBe(first!.expiresAt!.getTime());
   });
 });
 

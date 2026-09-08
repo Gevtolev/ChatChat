@@ -12,23 +12,6 @@ import type { Types } from 'mongoose';
 const REFILL_INTERVAL = { value: 1, unit: 'months' } as const;
 
 export function createQuotaMethods(mongoose: typeof import('mongoose')) {
-  /** Creates a new quota record for a user + period. */
-  async function createQuota(args: {
-    userId: Types.ObjectId;
-    periodStart: Date;
-  }): Promise<IQuotaLean> {
-    const Quota = mongoose.models.Quota as Model<IQuota>;
-    const now = new Date();
-    const doc = await Quota.create({
-      user_id: args.userId,
-      period_start: args.periodStart,
-      messages_used: 0,
-      created_at: now,
-      updated_at: now,
-    });
-    return doc.toObject() as IQuotaLean;
-  }
-
   /**
    * Atomically increments messages_used by 1 if below limit.
    * Returns the updated doc on success, or null when the quota is exhausted.
@@ -43,6 +26,10 @@ export function createQuotaMethods(mongoose: typeof import('mongoose')) {
     userId: Types.ObjectId;
     periodStart: Date;
     limit: number;
+    /** Set only for the anonymous trial, so MongoDB collects this counter with
+     *  the TTL-bound user it belongs to. `$setOnInsert`, so a later call in the
+     *  same trial does not push the expiry out. */
+    expiresAt?: Date;
   }): Promise<IQuotaLean | null> {
     const Quota = mongoose.models.Quota as Model<IQuota>;
     const now = new Date();
@@ -54,7 +41,10 @@ export function createQuotaMethods(mongoose: typeof import('mongoose')) {
     };
     const update: UpdateQuery<IQuota> = {
       $inc: { messages_used: 1 },
-      $setOnInsert: { created_at: now },
+      $setOnInsert: {
+        created_at: now,
+        ...(args.expiresAt != null && { expiresAt: args.expiresAt }),
+      },
       $set: { updated_at: now },
     };
 
@@ -231,7 +221,6 @@ export function createQuotaMethods(mongoose: typeof import('mongoose')) {
   }
 
   return {
-    createQuota,
     incrementQuota,
     resetQuota,
     getBalanceCredits,
