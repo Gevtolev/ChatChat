@@ -31,6 +31,7 @@ jest.mock('~/models', () => {
     deleteUserSkills: jest.fn().mockResolvedValue(undefined),
     deleteMessages: jest.fn().mockResolvedValue(undefined),
     deleteBalances: jest.fn().mockResolvedValue(undefined),
+    deleteBillingRecords: jest.fn().mockResolvedValue({ subscriptions: 1, quotas: 1 }),
     deleteActions: jest.fn().mockResolvedValue(undefined),
     deletePresets: jest.fn().mockResolvedValue(undefined),
     deleteUserKey: jest.fn().mockResolvedValue(undefined),
@@ -235,6 +236,21 @@ describe('deleteUserController', () => {
 
     expect(mockRes.status).toHaveBeenCalledWith(200);
     expect(mockRes.send).toHaveBeenCalledWith({ message: 'User deleted' });
+  });
+
+  /** The response promises every trace is gone. Subscription and Quota arrived
+   *  with plan gating, after this cascade was written, and were never added —
+   *  so a deleted account kept its plan record, and
+   *  `config/backfill-plan-credits.js` would grant it a fresh balance on its
+   *  next run. */
+  it('should delete the billing records', async () => {
+    const userId = new mongoose.Types.ObjectId();
+    const req = { user: { id: userId.toString(), _id: userId, email: 'test@test.com' } };
+
+    const { deleteBillingRecords } = require('~/models');
+    await deleteUserController(req, mockRes);
+
+    expect(deleteBillingRecords).toHaveBeenCalledWith(userId);
   });
 
   it('should remove the user from all groups via $pullAll', async () => {

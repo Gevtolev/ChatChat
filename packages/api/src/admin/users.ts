@@ -40,10 +40,26 @@ export interface AdminUsersDeps {
     principalType: PrincipalType;
     principalId: string | Types.ObjectId;
   }) => Promise<void>;
+  /**
+   * Removes this fork's Subscription and Quota rows. Upstream has no such
+   * tables, so their absence from the cascade above is ours to fix and not a
+   * divergence to weigh — the wider gap it documents (conversations, messages,
+   * files) is upstream's own call and stays as it is.
+   */
+  deleteBillingRecords: (
+    userId: string | Types.ObjectId,
+  ) => Promise<{ subscriptions: number; quotas: number }>;
 }
 
 export function createAdminUsersHandlers(deps: AdminUsersDeps) {
-  const { findUsers, countUsers, deleteUserById, deleteConfig, deleteAclEntries } = deps;
+  const {
+    findUsers,
+    countUsers,
+    deleteUserById,
+    deleteConfig,
+    deleteAclEntries,
+    deleteBillingRecords,
+  } = deps;
 
   async function listUsersHandler(req: ServerRequest, res: Response) {
     try {
@@ -162,6 +178,7 @@ export function createAdminUsersHandlers(deps: AdminUsersDeps) {
       const cleanupResults = await Promise.allSettled([
         deleteConfig(PrincipalType.USER, id),
         deleteAclEntries({ principalType: PrincipalType.USER, principalId: objectId }),
+        deleteBillingRecords(objectId),
       ]);
       for (const r of cleanupResults) {
         if (r.status === 'rejected') {

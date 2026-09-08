@@ -287,7 +287,6 @@ describe('createSocialUser — plan grant', () => {
       const deps = applyPlanChange.mock.calls[0][1];
       expect(Object.keys(deps).sort()).toEqual(
         [
-          'createQuota',
           'createSubscription',
           'expireActiveSubscriptions',
           'getActiveSubscriptionRecord',

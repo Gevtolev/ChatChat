@@ -2,7 +2,7 @@ import { logger } from '@librechat/data-schemas';
 import { CREDIT_DISPLAY_DIVISOR } from 'librechat-data-provider';
 import type { Types } from 'mongoose';
 import type { ISubscriptionLean, IQuotaLean } from '@librechat/data-schemas';
-import { getActiveSubscription } from './applyPlanChange';
+import { getActiveSubscription, anonymousRecordExpiry } from './applyPlanChange';
 import { isEnabled } from '~/utils';
 import { PLANS } from './plans';
 import { getModelTier } from './modelRegistry';
@@ -34,6 +34,9 @@ export interface GatingDeps {
     userId: Types.ObjectId;
     periodStart: Date;
     limit: number;
+    /** Only the anonymous plan sets this; the counter is then collected by
+     *  MongoDB alongside the TTL-bound user it belongs to. */
+    expiresAt?: Date;
   }) => Promise<IQuotaLean | null>;
 }
 
@@ -125,6 +128,7 @@ export async function checkBillingAccess(
       userId,
       periodStart: LIFETIME_EPOCH,
       limit: plan.lifetime_message_limit,
+      expiresAt: anonymousRecordExpiry(plan.code),
     });
     if (q === null) {
       throw new Error(

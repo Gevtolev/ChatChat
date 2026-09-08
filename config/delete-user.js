@@ -28,6 +28,7 @@ const {
   Conversation,
   ConversationTag,
 } = require('@librechat/data-schemas').createModels(mongoose);
+const { createMethods } = require('@librechat/data-schemas');
 require('module-alias')({ base: path.resolve(__dirname, '..', 'api') });
 const { askQuestion, silentExit } = require('./helpers');
 const connect = require('./connect');
@@ -98,6 +99,10 @@ async function gracefulExit(code = 0) {
     ToolCall.deleteMany({ user: uid }),
     Token.deleteMany({ userId: uid }),
     AclEntry.deleteMany({ principalId: user._id }),
+    /** Subscription and Quota arrived with plan gating, after this list was
+     *  written. Routed through the shared method so the next billing table is
+     *  one place to remember, not three. */
+    createMethods(mongoose).deleteBillingRecords(user._id),
   ];
 
   if (deleteTx) {
