@@ -183,8 +183,20 @@ describe('billing methods', () => {
 
   describe('SubscriptionMethods', () => {
     test('getActiveSubscriptionRecord returns newest non-expired active sub', async () => {
-      const older = new Date(now.getTime() - 1000);
-      const newer = new Date(now.getTime() + 1000);
+      /**
+       * An hour, not a second. `getActiveSubscriptionRecord` filters on
+       * `current_period_end: { $gt: new Date() }`, and `now` above is evaluated
+       * when jest *loads* this file — not when this case runs — so the margin
+       * has to cover every preceding case in the suite too. A one-second window
+       * made this fail intermittently under a full run while passing in
+       * isolation, which reads exactly like a real regression.
+       *
+       * The case is about "newest non-expired wins", not about a boundary, so
+       * the exact margin carries no meaning beyond being comfortably clear of
+       * the run time.
+       */
+      const older = new Date(now.getTime() - 60 * 60 * 1000);
+      const newer = new Date(now.getTime() + 60 * 60 * 1000);
 
       await Subscription.create({
         user_id: userId,
