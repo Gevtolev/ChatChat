@@ -60,6 +60,7 @@ jest.mock('~/models', () => ({
   deleteUserSkills: (...args) => mockDeleteUserSkills(...args),
   deleteTransactions: jest.fn(),
   deleteBalances: jest.fn(),
+  deleteBillingRecords: jest.fn().mockResolvedValue({ subscriptions: 0, quotas: 0 }),
   deleteAllAgentApiKeys: jest.fn(),
   deleteAssistants: jest.fn(),
   deleteConversationTags: jest.fn(),
