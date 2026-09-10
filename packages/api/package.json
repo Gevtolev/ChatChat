@@ -155,6 +155,7 @@
   },
   "dependencies": {
     "@sentry/node": "^10.74.0",
-    "posthog-node": "^5.51.8"
+    "posthog-node": "^5.51.8",
+    "winston-transport": "^4.9.0"
   }
 }

@@ -1,7 +1,36 @@
-import * as Sentry from '@sentry/node';
 import Transport from 'winston-transport';
 import { scrubEvent } from './scrub';
 import type { Logger } from 'winston';
+
+type SentryApi = typeof import('@sentry/node');
+
+let sentry: SentryApi | null = null;
+
+/**
+ * Loads the SDK on first use rather than at import time.
+ *
+ * A static import would make this module's cost unconditional: `@librechat/api`
+ * re-exports it, so every consumer — including every test that touches anything
+ * in the package — would load `@sentry/node`, whose context integration
+ * promisifies filesystem calls while being imported. Two image-tool suites that
+ * stub those calls failed outright, having nothing to do with error reporting.
+ *
+ * The project prefers static imports, and this is the exception it allows for:
+ * an optional feature must not charge its cost to deployments that have not
+ * enabled it.
+ */
+function loadSentry(): SentryApi | null {
+  if (sentry) {
+    return sentry;
+  }
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    sentry = require('@sentry/node') as SentryApi;
+    return sentry;
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Errors that are loud, expected, and tell us nothing. Matched against the
@@ -67,11 +96,19 @@ class SentryIssueTransport extends Transport {
         return;
       }
       const { level: _level, message: _message, ...rest } = info;
+      /** `loadSentry` rather than the cached handle: the transport is only ever
+       *  attached after `initSentry` has loaded the SDK, and the call is
+       *  memoised, so this costs nothing and keeps the class usable on its own. */
+      const client = loadSentry();
+      if (!client) {
+        callback();
+        return;
+      }
       const error = findError(info);
       if (error) {
-        Sentry.captureException(error, { extra: { logMessage: message, ...rest } });
+        client.captureException(error, { extra: { logMessage: message, ...rest } });
       } else {
-        Sentry.captureMessage(message, { level: 'error', extra: rest });
+        client.captureMessage(message, { level: 'error', extra: rest });
       }
     } catch {
       /* observability is never a failure source */
@@ -102,8 +139,13 @@ export function initSentry(logger: Logger, env: NodeJS.ProcessEnv = process.env)
     return false;
   }
 
+  const client = loadSentry();
+  if (!client) {
+    return false;
+  }
+
   try {
-    Sentry.init({
+    client.init({
       dsn: env.SENTRY_DSN,
       environment: env.NODE_ENV ?? 'development',
       release: env.SENTRY_RELEASE,
@@ -132,6 +174,7 @@ export function initSentry(logger: Logger, env: NodeJS.ProcessEnv = process.env)
 /** Test seam. */
 export function resetSentry(): void {
   initialised = false;
+  sentry = null;
 }
 
 export { SentryIssueTransport };
