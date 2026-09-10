@@ -16,7 +16,10 @@ import LegalLayout, { Section, P, List, Placeholder } from './Layout';
  *     deleted. Saying anything else would be false.
  *   - `deleteUserController` removes conversations, messages, files, balance,
  *     transactions and billing records.
- *   - No analytics, error tracking or tag manager is configured.
+ *   - No tag manager or advertising tracker is configured. Error reporting
+ *     (Sentry) and product analytics (PostHog) are wired in and send only an
+ *     irreversible hash of the user id plus a fixed allowlist of properties —
+ *     never message content. Both are inert until their keys are set.
  *   - **We pass no training opt-out or zero-retention flag to any provider.**
  *     `zdrEnabled` exists in the SDK's option list and is never set. The
  *     "vendor training disabled by default" line in the stage-4 spec is not
@@ -62,7 +65,19 @@ export default function Privacy() {
         </P>
         <P>
           <strong>Technical data.</strong> Ordinary server logs, and a session cookie that keeps you
-          signed in. We do not run analytics, advertising or third-party tracking on this site.
+          signed in. We run no advertising and no third-party ad tracking, and nothing on this site
+          follows you across other websites.
+        </P>
+        <P>
+          <strong>Diagnostics and product measurement.</strong> When something breaks, an error
+          report goes to our error-tracking provider. Separately, we record a small set of product
+          events — that a message was sent, which model and plan it used, that a signup completed,
+          that an allowance ran out.{' '}
+          <strong>
+            Neither includes the content of your conversations, your files, your name or your email.
+          </strong>{' '}
+          In both, you appear as an irreversible hash of your account identifier rather than as an
+          account we could look you up by.
         </P>
       </Section>
 
@@ -111,6 +126,14 @@ export default function Privacy() {
           </li>
           <li>
             <strong>Google</strong> — handles sign-in.
+          </li>
+          <li>
+            <strong>Sentry</strong> — receives error reports so we can find faults without waiting
+            for someone to tell us.
+          </li>
+          <li>
+            <strong>PostHog</strong> — receives the product events above. Hosted in the European
+            Union.
           </li>
         </List>
         <P>

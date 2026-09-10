@@ -2,6 +2,7 @@ const { logger, tenantStorage } = require('@librechat/data-schemas');
 const { Constants, ViolationTypes } = require('librechat-data-provider');
 const {
   sendEvent,
+  analytics,
   toPendingSteer,
   getViolationInfo,
   buildMessageFiles,
@@ -990,6 +991,25 @@ const _LegacyAgentController = async (req, res, next, initializeClient, addTitle
         responseMessage: finalResponse,
       });
       res.end();
+
+      /**
+       * After `res.end()` — the user already has their answer, so nothing here
+       * can slow their request down. Fired once per user-visible turn, not from
+       * `recordCollectedUsage`, which runs once per model group (message,
+       * summarization, subagent) and would count one turn several times.
+       *
+       * `is_new_conversation` rather than the spec's `is_first_message`:
+       * knowing whether this was the user's *first ever* message needs a
+       * database lookup on the message path, and the same question is answered
+       * for free by a PostHog funnel from `signup_completed` to `message_sent`
+       * — which also yields time-to-activation, which the property would not.
+       */
+      analytics.messageSent(String(userId), {
+        model: client.modelOptions?.model ?? client.model,
+        plan: client.planCode,
+        endpoint: client.options?.endpoint,
+        is_new_conversation: parentMessageId === Constants.NO_PARENT,
+      });
 
       // Save the message if needed
       if (client.savedMessageIds && !client.savedMessageIds.has(messageId)) {

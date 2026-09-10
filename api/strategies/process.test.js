@@ -27,6 +27,9 @@ jest.mock('@librechat/api', () => ({
   })),
   applyPlanChange: jest.fn(),
   buildPlanChangeDeps: jest.requireActual('@librechat/api').buildPlanChangeDeps,
+  /** Real, not stubbed: without a PostHog key it is already a no-op, so the
+   *  test exercises the same path production takes when telemetry is off. */
+  analytics: jest.requireActual('@librechat/api').analytics,
 }));
 
 const { getStrategyFunctions } = require('~/server/services/Files/strategies');

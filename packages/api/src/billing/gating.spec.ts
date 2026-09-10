@@ -81,7 +81,9 @@ beforeEach(async () => {
   methods = createMethods(mongoose);
 });
 
-async function expectDenied(promise: Promise<void>, expectedCode: string): Promise<void> {
+/** `unknown` because the gate now resolves to the plan it applied; these
+ *  cases only care that it rejected. */
+async function expectDenied(promise: Promise<unknown>, expectedCode: string): Promise<void> {
   let thrown: unknown;
   try {
     await promise;
@@ -126,7 +128,7 @@ describe('checkBillingAccess — model tier gating', () => {
 
     await expect(
       checkBillingAccess({ userId, modelId: 'gpt-5.5' }, gatingDeps()),
-    ).resolves.toBeUndefined();
+    ).resolves.toBeDefined();
   });
 
   /** A row whose `plan_code` is no longer in `PLANS` — what retiring a plan
@@ -258,7 +260,7 @@ describe('checkBillingAccess — model tier gating', () => {
           },
           gatingDeps(),
         ),
-      ).resolves.toBeUndefined();
+      ).resolves.toBeDefined();
     });
 
     /** A caller that cannot estimate must not be blocked: a missing number is
@@ -268,7 +270,7 @@ describe('checkBillingAccess — model tier gating', () => {
 
       await expect(
         checkBillingAccess({ userId, modelId: 'gpt-5.4-nano' }, gatingDeps()),
-      ).resolves.toBeUndefined();
+      ).resolves.toBeDefined();
     });
   });
 
@@ -295,7 +297,9 @@ describe('checkBillingAccess — DISABLE_BILLING_GATING escape hatch', () => {
     const userId = new mongoose.Types.ObjectId();
     const deps = gatingDeps();
 
-    await expect(checkBillingAccess({ userId, modelId: 'gpt-5.5' }, deps)).resolves.toBeUndefined();
+    /** Resolves to the plan it applied — `free` here, since the escape hatch
+     *  exempts the user rather than upgrading them. */
+    await expect(checkBillingAccess({ userId, modelId: 'gpt-5.5' }, deps)).resolves.toBe('free');
 
     const quotaRecord = await mongoose.models.Quota.findOne({ user_id: userId }).lean();
     expect(quotaRecord).toBeNull();
@@ -325,13 +329,13 @@ describe('checkBillingAccess — DISABLE_BILLING_GATING escape hatch', () => {
     // independent of DISABLE_BILLING_GATING (which still exempts non-anonymous users).
     await expect(
       checkBillingAccess({ userId, modelId: 'x-ai/grok-4.3' }, deps),
-    ).resolves.toBeUndefined();
+    ).resolves.toBeDefined();
     await expect(
       checkBillingAccess({ userId, modelId: 'x-ai/grok-4.3' }, deps),
-    ).resolves.toBeUndefined();
+    ).resolves.toBeDefined();
     await expect(
       checkBillingAccess({ userId, modelId: 'x-ai/grok-4.3' }, deps),
-    ).resolves.toBeUndefined();
+    ).resolves.toBeDefined();
     await expectDenied(
       checkBillingAccess({ userId, modelId: 'x-ai/grok-4.3' }, deps),
       'upgrade_required_quota',
@@ -360,7 +364,7 @@ describe('checkBillingAccess — feature gating', () => {
 
     await expect(
       checkBillingAccess({ userId, modelId: 'gpt-5.4-mini', featureFlag: 'agents' }, gatingDeps()),
-    ).resolves.toBeUndefined();
+    ).resolves.toBeDefined();
   });
 });
 
@@ -512,7 +516,7 @@ describe('checkBillingAccess — balance-driven quota', () => {
 
     await expect(
       checkBillingAccess({ userId, modelId: 'gpt-5.4-mini' }, deps),
-    ).resolves.toBeUndefined();
+    ).resolves.toBeDefined();
 
     await mongoose.models.Balance.updateOne({ user: userId }, { $set: { tokenCredits: 0 } });
 
@@ -582,7 +586,7 @@ describe('checkBillingAccess — monthly grant renewal', () => {
 
     await expect(
       checkBillingAccess({ userId, modelId: 'gpt-5.5' }, gatingDeps()),
-    ).resolves.toBeUndefined();
+    ).resolves.toBeDefined();
 
     expect((await balanceOf(userId)).tokenCredits).toBe(PLANS.plus.monthly_token_credits);
   });

@@ -1,7 +1,12 @@
 const { FileSources } = require('librechat-data-provider');
 const { getStrategyFunctions } = require('~/server/services/Files/strategies');
 const { resizeAvatar } = require('~/server/services/Files/images/avatar');
-const { getBalanceConfig, applyPlanChange, buildPlanChangeDeps } = require('@librechat/api');
+const {
+  analytics,
+  getBalanceConfig,
+  applyPlanChange,
+  buildPlanChangeDeps,
+} = require('@librechat/api');
 const { updateUser, createUser, getUserById } = require('~/models');
 const db = require('~/models');
 
@@ -111,6 +116,11 @@ const createSocialUser = async ({
     { user_id: newUserId, plan_code: 'free', source: 'system_default' },
     buildPlanChangeDeps(db),
   );
+
+  /** After the plan grant, so a signup that failed halfway is not counted as
+   *  one. `provider` is the strategy name — google, github — which is the only
+   *  thing this event needs to answer "which channel converts". */
+  analytics.signupCompleted(String(newUserId), provider);
 
   const fileStrategy = appConfig?.fileStrategy ?? process.env.CDN_PROVIDER;
   const isLocal = fileStrategy === FileSources.local;
