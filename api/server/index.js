@@ -12,6 +12,7 @@ const mongoSanitize = require('express-mongo-sanitize');
 const { logger, runAsSystem } = require('@librechat/data-schemas');
 const {
   isEnabled,
+  initSentry,
   apiNotFound,
   createMetrics,
   ErrorController,
@@ -59,6 +60,13 @@ const app = express();
 let serverReady = false;
 
 const startServer = async () => {
+  /* Before anything else that can fail. Attaches to the winston logger, so from
+   * here on every `logger.error` — including the process-level handlers at the
+   * bottom of this file — becomes a Sentry issue. No-op without SENTRY_DSN. */
+  if (initSentry(logger)) {
+    logger.info('[sentry] Error reporting enabled');
+  }
+
   const { metricsMiddleware, metricsRouter } = createMetrics();
   if (!process.env.METRICS_SECRET) {
     logger.warn('[metrics] METRICS_SECRET is not set - /metrics will return 401 for all requests');

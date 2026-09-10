@@ -14,6 +14,7 @@ const { logger, runAsSystem } = require('@librechat/data-schemas');
 const mongoSanitize = require('express-mongo-sanitize');
 const {
   isEnabled,
+  initSentry,
   apiNotFound,
   ErrorController,
   escapeHtmlAttribute,
@@ -267,6 +268,11 @@ if (cluster.isMaster) {
   });
 
   const startServer = async () => {
+    /* Same rationale as api/server/index.js: attach before anything can fail. */
+    if (initSentry(logger)) {
+      logger.info(`Worker ${process.pid}: [sentry] Error reporting enabled`);
+    }
+
     logger.info(`Worker ${process.pid} initializing...`);
 
     if (typeof Bun !== 'undefined') {

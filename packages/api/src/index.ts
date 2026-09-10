@@ -72,6 +72,8 @@ export * from './web';
 export * from './cache';
 /* Stream */
 export * from './stream';
+export * from './analytics';
+export * from './observability';
 /* Diagnostics */
 export { memoryDiagnostics } from './utils/memory';
 /* types */

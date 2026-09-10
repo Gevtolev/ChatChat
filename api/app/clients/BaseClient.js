@@ -570,7 +570,10 @@ class BaseClient {
       );
     }
 
-    await checkBillingAccess(
+    /** Kept for telemetry: the gate has already resolved this user's plan, and
+     *  labelling `message_sent` with it would otherwise cost a second
+     *  subscription lookup on every message. */
+    this.planCode = await checkBillingAccess(
       {
         userId: this.user,
         modelId: this.modelOptions?.model ?? this.model,

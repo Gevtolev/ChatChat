@@ -2,6 +2,7 @@ import type { Types } from 'mongoose';
 import type { PlanCode, PlanChangeSource, SubStatus } from 'librechat-data-provider';
 import type { ISubscriptionLean } from '@librechat/data-schemas';
 import { PLANS } from './plans';
+import { analytics } from '~/analytics';
 
 // ---------------------------------------------------------------------------
 // Shared types
@@ -213,7 +214,11 @@ export async function applyPlanChange(
     await deps.grantMonthlyCredits({ userId: user_id, credits });
   }
 
-  // TODO(stage5): emit plan_changed PostHog event { from: previous_plan, to: plan_code, source }
+  analytics.planChanged(String(user_id), {
+    from: previous_plan,
+    to: plan_code,
+    source,
+  });
 
   return { subscription, previous_plan };
 }

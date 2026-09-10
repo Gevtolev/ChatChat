@@ -1,10 +1,12 @@
 import { logger } from '@librechat/data-schemas';
 import { CREDIT_DISPLAY_DIVISOR } from 'librechat-data-provider';
+import type { PlanCode } from 'librechat-data-provider';
 import type { Types } from 'mongoose';
 import type { ISubscriptionLean, IQuotaLean } from '@librechat/data-schemas';
 import { getActiveSubscription, anonymousRecordExpiry } from './applyPlanChange';
 import { isEnabled } from '~/utils';
 import { PLANS } from './plans';
+import { analytics } from '~/analytics';
 import { getModelTier } from './modelRegistry';
 import type { FeatureKey } from './modelRegistry';
 
@@ -47,7 +49,8 @@ const LIFETIME_EPOCH = new Date(0);
  * Checks whether a user is allowed to use a model (and optional feature).
  *
  * Throws `Error(JSON.stringify({ code, ... }))` on denial — callers parse the
- * JSON payload to extract `code` and surface the right UI message.
+ * JSON payload to extract `code` and surface the right UI message. Returns the
+ * plan it resolved, which the caller would otherwise have to look up again.
  *
  * Four denial codes (lowercase, matching the future ErrorTypes enum values):
  *   - 'upgrade_required_model'  — model tier blocked by current plan
@@ -70,7 +73,7 @@ export async function checkBillingAccess(
     endpointTokenConfig?: Record<string, Record<string, number>> | null;
   },
   deps: GatingDeps,
-): Promise<void> {
+): Promise<PlanCode> {
   const userId =
     typeof args.userId === 'string' ? (args.userId as unknown as Types.ObjectId) : args.userId;
 
@@ -100,7 +103,7 @@ export async function checkBillingAccess(
    *  cap is always enforced (independent of this flag) so unauthenticated visitors
    *  stay limited to their trial even while gating is otherwise disabled. */
   if (plan.code !== 'anonymous' && isEnabled(process.env.DISABLE_BILLING_GATING)) {
-    return;
+    return plan.code;
   }
 
   const tier = getModelTier(args.modelId);
@@ -131,6 +134,12 @@ export async function checkBillingAccess(
       expiresAt: anonymousRecordExpiry(plan.code),
     });
     if (q === null) {
+      /** The trial cap, not a paid allowance — the two are separate product
+       *  decisions and the funnel needs to tell them apart. */
+      analytics.quotaExhausted(String(userId), {
+        plan: plan.code,
+        limit_type: 'trial_messages',
+      });
       throw new Error(
         JSON.stringify({
           code: 'upgrade_required_quota',
@@ -197,6 +206,14 @@ export async function checkBillingAccess(
        * ever been shown; the client has no divisor until entitlements load, and
        * an error must not depend on a separate request having succeeded.
        */
+      /** Answers "is the allowance set right?" — `credits_at_block` shows
+       *  whether people stop at zero or are refused while still holding a
+       *  balance too small for the model they picked. */
+      analytics.quotaExhausted(String(userId), {
+        plan: plan.code,
+        limit_type: 'credits',
+        credits_at_block: Math.max(0, Math.floor(credits / CREDIT_DISPLAY_DIVISOR)),
+      });
       throw new Error(
         JSON.stringify({
           code: 'insufficient_credits',
@@ -206,4 +223,8 @@ export async function checkBillingAccess(
       );
     }
   }
+
+  /** The resolved plan, so callers that already paid for this lookup can label
+   *  telemetry with it instead of querying the subscription a second time. */
+  return plan.code;
 }

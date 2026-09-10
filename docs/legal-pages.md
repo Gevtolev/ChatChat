@@ -21,7 +21,8 @@
 | 数据库 MongoDB Atlas、服务器在美国 | `MONGO_URI`；主机 Hostinger，出口 Boston/US | 成立 |
 | **对话没有自动过期** | 生产 `librechat.yaml` 无 retention 配置 | 成立 —— 页面如实写「留到你自己删」，**不要**写成 30 天 |
 | 删号会删干净 | `deleteUserController` 删对话/消息/文件/余额/交易/计费记录 | 成立（2026-09-08 PR #60 才补上计费两张表） |
-| 无分析/埋点/广告追踪 | 无 PostHog、无 Sentry、无 `analyticsGtmId` | 成立 |
+| 无广告追踪 | 无 `analyticsGtmId`，无任何广告 SDK | 成立 |
+| 错误上报 / 产品埋点 | Sentry + PostHog 已接入（2026-09-10），只发不可逆哈希 + 属性白名单，**绝不发对话内容**；无密钥时彻底 no-op | 成立，页面已如实列为子处理者 |
 | 额度不滚存、买断额度不过期 | `packages/api/src/billing/`，`refreshMonthlyGrant` 覆盖式 `$set` | 成立 |
 | 无自助付款 | 无 Stripe，`applyPlanChange` 只由 admin/CLI 触发 | 成立 |
 
