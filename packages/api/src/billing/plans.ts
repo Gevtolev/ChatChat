@@ -2,23 +2,18 @@
 import type { PlanCode, PlanConfig } from 'librechat-data-provider';
 
 export const PLANS: Record<PlanCode, PlanConfig> = {
-  anonymous: {
-    code: 'anonymous',
-    name: 'Anonymous',
-    monthly_price_cents: 0,
-    allowed_cost_tiers: ['cheap', 'mid', 'expensive'],
-    // 匿名访客不发积分：其试用是产品规则，用条数而非额度表达
-    monthly_token_credits: 0,
-    lifetime_message_limit: 3,
-    features: { agents: false, image_gen: false, voice: true, web_search: false },
-  },
   free: {
     code: 'free',
     name: 'Free',
     monthly_price_cents: 0,
+    /** Cheap models only. The free tier is a taste of the product, not a
+     *  subsidy for the expensive ones. */
     allowed_cost_tiers: ['cheap'],
-    monthly_token_credits: 200_000, // 占位：约 $0.2 成本的试用额度
-    lifetime_message_limit: 0,
+    /** No credits: the free allowance is a product rule stated in messages,
+     *  which people can understand and count, rather than in credits they
+     *  cannot. Granting both would gate the same tier twice. */
+    monthly_token_credits: 0,
+    lifetime_message_limit: 3,
     features: { agents: false, image_gen: false, voice: false, web_search: false },
   },
   trial: {

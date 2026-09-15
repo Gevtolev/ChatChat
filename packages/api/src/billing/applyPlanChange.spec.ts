@@ -1,7 +1,6 @@
 import mongoose from 'mongoose';
 import { MongoMemoryServer } from 'mongodb-memory-server';
 import { createModels, createMethods } from '@librechat/data-schemas';
-import type { ISubscriptionLean } from '@librechat/data-schemas';
 import {
   applyPlanChange,
   getActiveSubscription,
@@ -70,35 +69,6 @@ describe('applyPlanChange', () => {
     await applyPlanChange({ user_id: userId, plan_code: 'plus', source: 'admin' }, deps);
 
     expect(await mongoose.models.Quota.countDocuments({ user_id: userId })).toBe(0);
-  });
-
-  /** Anonymous accounts are TTL-collected after 7 days and MongoDB does not
-   *  cascade, so the subscription carries its own expiry — a day later than the
-   *  user, never earlier, or a visitor mid-trial loses their plan and the gate
-   *  refuses them. */
-  test('anonymous subscriptions expire, paid ones do not', async () => {
-    const anon = new mongoose.Types.ObjectId();
-    const paid = new mongoose.Types.ObjectId();
-
-    await applyPlanChange(
-      { user_id: anon, plan_code: 'anonymous', source: 'system_default' },
-      deps,
-    );
-    await applyPlanChange({ user_id: paid, plan_code: 'plus', source: 'admin' }, deps);
-
-    const anonRow = await mongoose.models.Subscription.findOne({
-      user_id: anon,
-    }).lean<ISubscriptionLean>();
-    const paidRow = await mongoose.models.Subscription.findOne({
-      user_id: paid,
-    }).lean<ISubscriptionLean>();
-
-    const USER_TTL_MS = 7 * 24 * 60 * 60 * 1000;
-    expect(anonRow?.expiresAt).toBeInstanceOf(Date);
-    expect(anonRow!.expiresAt!.getTime()).toBeGreaterThan(Date.now() + USER_TTL_MS);
-    /** Absent, not null: a document without the field is never expired, which
-     *  is how a paid subscription stays put. */
-    expect(paidRow?.expiresAt).toBeUndefined();
   });
 
   test('second grant (trial) expires first sub; exactly one active remains; previous_plan=plus', async () => {

@@ -281,7 +281,6 @@ export default function useEventHandlers({
   const { announcePolite } = useLiveAnnouncer();
   const applyAgentTemplate = useApplyAgentTemplate();
   const setAbortScroll = useSetRecoilState(store.abortScroll);
-  const setGuestUpgradeModalOpen = useSetRecoilState(store.guestUpgradeModalOpen);
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -908,16 +907,6 @@ export default function useEventHandlers({
       const { messages, userMessage, initialResponse } = submission;
       setCompleted((prev) => new Set(prev.add(initialResponse.messageId)));
 
-      /**
-       * Anonymous (GUEST) visitors exhaust their free-trial quota with an
-       * `upgrade_required_quota` error; surface the strong login prompt instead of leaving
-       * them with only the inline error bubble. The modal only mounts in the guest layout,
-       * so setting this for a non-guest is a harmless no-op.
-       */
-      if (data && JSON.stringify(data).includes('upgrade_required_quota')) {
-        setGuestUpgradeModalOpen(true);
-      }
-
       const conversationId =
         userMessage.conversationId ?? submission.conversation?.conversationId ?? '';
 
@@ -1011,7 +1000,6 @@ export default function useEventHandlers({
       setIsSubmitting,
       getMessages,
       queryClient,
-      setGuestUpgradeModalOpen,
     ],
   );
 

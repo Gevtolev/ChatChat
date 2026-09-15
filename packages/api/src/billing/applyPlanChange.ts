@@ -45,8 +45,6 @@ export interface PlanChangeDeps {
     externalRef?: string | null;
     grantedBy?: Types.ObjectId | null;
     metadata?: Record<string, string>;
-    /** Only the anonymous plan sets this; see `ANONYMOUS_RECORD_TTL_MS`. */
-    expiresAt?: Date;
   }) => Promise<ISubscriptionLean>;
 }
 
@@ -65,35 +63,8 @@ export const PERIOD_DAYS: Record<PlanCode, number> = {
   max: 30,
   trial: 7,
   free: 30,
-  anonymous: 30,
   beta: 30,
 };
-
-/**
- * When an anonymous visitor's billing rows should disappear.
- *
- * Their `User` document carries a 7-day TTL (`createUser` sets `expiresAt` to
- * `now + 604800s`), and MongoDB's TTL monitor removes only the row it is set on
- * — it does not cascade. So the subscription and quota pointing at a collected
- * anonymous user survived forever; production had 110 and 116 of them.
- *
- * **A day longer than the user, deliberately.** If a billing row expired first,
- * a visitor still inside their trial would lose their subscription, the gate
- * would fall back to `free`, and — having no Balance — they would be refused
- * with `insufficient_credits` mid-trial. Erring long can only leave a dead row
- * around for an extra day; erring short breaks the product's front door.
- *
- * The 7 days is a literal inside upstream's `createUser`, so this is a coupling
- * a comment has to carry rather than a shared constant. Drift costs a day.
- */
-const ANONYMOUS_RECORD_TTL_MS = 8 * 24 * 60 * 60 * 1000;
-
-export function anonymousRecordExpiry(planCode: PlanCode): Date | undefined {
-  if (planCode !== 'anonymous') {
-    return undefined;
-  }
-  return new Date(Date.now() + ANONYMOUS_RECORD_TTL_MS);
-}
 
 // ---------------------------------------------------------------------------
 // SYSTEM_DEFAULT_FREE_SUBSCRIPTION
@@ -190,7 +161,6 @@ export async function applyPlanChange(
     externalRef: external_ref ?? null,
     grantedBy: granted_by ?? null,
     metadata: metadata ?? {},
-    expiresAt: anonymousRecordExpiry(plan_code),
   });
 
   /**

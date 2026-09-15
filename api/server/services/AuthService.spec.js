@@ -46,9 +46,6 @@ jest.mock('~/models', () => ({
 jest.mock('~/strategies/validators', () => ({
   registerSchema: { parse: jest.fn(), safeParse: jest.fn(() => ({ error: null })) },
 }));
-jest.mock('~/server/services/anonymousAccount', () => ({
-  getPriorAnonymousUserId: jest.fn(async () => null),
-}));
 jest.mock('~/server/services/Config', () => ({ getAppConfig: jest.fn() }));
 jest.mock('~/server/utils', () => ({ sendEmail: jest.fn() }));
 

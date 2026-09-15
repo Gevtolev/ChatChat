@@ -17,10 +17,10 @@ import {
   MessageCircleHeart,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
-import { QueryKeys, SystemRoles, PermissionTypes, Permissions } from 'librechat-data-provider';
+import { QueryKeys, PermissionTypes, Permissions } from 'librechat-data-provider';
 import { isDark, Button, Skeleton, ThemeContext, TooltipAnchor } from '@librechat/client';
 import { useGetStartupConfig } from '~/data-provider';
-import { useLocalize, useNewConvo, useAuthContext, useHasAccess } from '~/hooks';
+import { useLocalize, useNewConvo, useHasAccess } from '~/hooks';
 import { clearMessagesCache, cn } from '~/utils';
 import store from '~/store';
 import ConversationsSection from './ConversationsSection';
@@ -67,8 +67,6 @@ function SideMenu({ onCollapse }: { onCollapse?: () => void }) {
   const conversation = useRecoilValue(store.conversationByIndex(0));
   const { theme, setTheme } = useContext(ThemeContext);
   const { data: startupConfig } = useGetStartupConfig();
-  const { user } = useAuthContext();
-  const isGuest = user?.role === SystemRoles.GUEST;
   const canUseBookmarks = useHasAccess({
     permissionType: PermissionTypes.BOOKMARKS,
     permission: Permissions.USE,
@@ -182,20 +180,16 @@ function SideMenu({ onCollapse }: { onCollapse?: () => void }) {
             onClick={() => navigate('/memories')}
           />
         )}
-        {!isGuest && (
-          <NavRow
-            icon={LayoutGrid}
-            label={localize('com_ui_apps')}
-            onClick={() => navigate('/apps')}
-          />
-        )}
-        {!isGuest && (
-          <NavRow
-            icon={Telescope}
-            label={localize('com_ui_deep_research')}
-            onClick={() => navigate('/deep-research')}
-          />
-        )}
+        <NavRow
+          icon={LayoutGrid}
+          label={localize('com_ui_apps')}
+          onClick={() => navigate('/apps')}
+        />
+        <NavRow
+          icon={Telescope}
+          label={localize('com_ui_deep_research')}
+          onClick={() => navigate('/deep-research')}
+        />
       </div>
 
       <div className="flex min-h-0 flex-1 flex-col px-2 pt-2">
@@ -211,22 +205,10 @@ function SideMenu({ onCollapse }: { onCollapse?: () => void }) {
           <MessageCircleHeart className="h-4 w-4" aria-hidden="true" />
           {localize('com_nav_share_feedback')}
         </button>
-        {isGuest ? (
-          <Button
-            variant="submit"
-            className="h-9 w-full rounded-lg"
-            onClick={() => navigate('/login')}
-          >
-            {localize('com_auth_login')}
-          </Button>
-        ) : (
-          <>
-            <AllowanceMeter />
-            <Suspense fallback={<Skeleton className="h-12 w-full rounded-xl" />}>
-              <AccountSettings />
-            </Suspense>
-          </>
-        )}
+        <AllowanceMeter />
+        <Suspense fallback={<Skeleton className="h-12 w-full rounded-xl" />}>
+          <AccountSettings />
+        </Suspense>
       </div>
     </div>
   );

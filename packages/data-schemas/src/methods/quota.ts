@@ -26,10 +26,6 @@ export function createQuotaMethods(mongoose: typeof import('mongoose')) {
     userId: Types.ObjectId;
     periodStart: Date;
     limit: number;
-    /** Set only for the anonymous trial, so MongoDB collects this counter with
-     *  the TTL-bound user it belongs to. `$setOnInsert`, so a later call in the
-     *  same trial does not push the expiry out. */
-    expiresAt?: Date;
   }): Promise<IQuotaLean | null> {
     const Quota = mongoose.models.Quota as Model<IQuota>;
     const now = new Date();
@@ -41,10 +37,7 @@ export function createQuotaMethods(mongoose: typeof import('mongoose')) {
     };
     const update: UpdateQuery<IQuota> = {
       $inc: { messages_used: 1 },
-      $setOnInsert: {
-        created_at: now,
-        ...(args.expiresAt != null && { expiresAt: args.expiresAt }),
-      },
+      $setOnInsert: { created_at: now },
       $set: { updated_at: now },
     };
 

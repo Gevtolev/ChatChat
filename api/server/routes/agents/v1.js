@@ -1,12 +1,7 @@
 const express = require('express');
 const { generateCheckAccess } = require('@librechat/api');
 const { PermissionTypes, Permissions, PermissionBits } = require('librechat-data-provider');
-const {
-  requireJwtAuth,
-  denyGuestRole,
-  configMiddleware,
-  canAccessAgentResource,
-} = require('~/server/middleware');
+const { requireJwtAuth, configMiddleware, canAccessAgentResource } = require('~/server/middleware');
 const v1 = require('~/server/controllers/agents/v1');
 const { getRoleByName } = require('~/models');
 const actions = require('./actions');
@@ -158,13 +153,7 @@ router.post(
  * @param {AgentListParams} req.query - The agent list parameters for pagination and sorting.
  * @returns {AgentListResponse} 200 - success response - application/json
  */
-/**
- * `checkAgentAccess` alone can't distinguish "chat with an agent" from "list/browse all
- * agents" — the GUEST role needs AGENTS.USE to chat, which would otherwise also unlock this
- * listing. `denyGuestRole` blocks it here specifically, without touching the AGENTS.USE bit
- * that chat relies on.
- */
-router.get('/', denyGuestRole, checkAgentAccess, v1.getListAgents);
+router.get('/', checkAgentAccess, v1.getListAgents);
 
 /**
  * Uploads and updates an avatar for a specific agent.

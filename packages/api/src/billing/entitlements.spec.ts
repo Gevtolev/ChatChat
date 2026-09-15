@@ -87,15 +87,17 @@ describe('getEntitlements', () => {
     expect(result.plan.code).toBe('free');
   });
 
-  /** Anonymous grants no credits — its cap is a message count. A zeroed credit
-   *  object would render as an exhausted allowance rather than none. */
-  it('reports null credits for a plan that grants none', async () => {
+  /** Free grants no credits — its cap is a message count. A zeroed credit
+   *  object would render as an exhausted allowance rather than an absent one,
+   *  and the meter would show an empty bar to someone with three messages in
+   *  hand. */
+  it('reports null credits for the message-capped free tier', async () => {
     const result = await getEntitlements(
       userId,
-      deps({ getActiveSubscriptionRecord: subscription('anonymous') }),
+      deps({ getActiveSubscriptionRecord: subscription('free') }),
     );
 
-    expect(result.plan.code).toBe('anonymous');
+    expect(result.plan.code).toBe('free');
     expect(result.credits).toBeNull();
   });
 });

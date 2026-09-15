@@ -46,18 +46,28 @@ describe('PLANS', () => {
       expect(PLANS[code].code).toBe(code);
     }
   });
-  test('anonymous grants no credits — its trial is enforced separately', () => {
-    /** The 3-message anonymous trial is not a billing quota: it is gated by the
-     *  anonymous-trial mechanism, which must stay in force even when billing
-     *  gating is disabled. Granting credits here would double-gate it. */
-    expect(PLANS.anonymous.monthly_token_credits).toBe(0);
-    expect(PLANS.anonymous.features.image_gen).toBe(false);
-    expect(PLANS.anonymous.features.agents).toBe(false);
+  /**
+   * Free is measured in messages, not credits, and the two must not both apply:
+   * a credit grant here would double-gate the tier, and the cap people are told
+   * about is the message one.
+   */
+  test('free is capped by messages and grants no credits', () => {
+    expect(PLANS.free.lifetime_message_limit).toBe(3);
+    expect(PLANS.free.monthly_token_credits).toBe(0);
   });
-  test('free only allows cheap tier and a small credit grant', () => {
+
+  test('free only reaches the cheap tier', () => {
     expect(PLANS.free.allowed_cost_tiers).toEqual(['cheap']);
-    expect(PLANS.free.monthly_token_credits).toBeGreaterThan(0);
     expect(PLANS.free.features.image_gen).toBe(false);
+    expect(PLANS.free.features.agents).toBe(false);
+  });
+
+  /** Only the free tier is message-capped; every paid tier meters credits. */
+  test('no paid plan is message-capped', () => {
+    for (const code of ['trial', 'plus', 'pro', 'max', 'beta'] as const) {
+      expect(PLANS[code].lifetime_message_limit).toBe(0);
+      expect(PLANS[code].monthly_token_credits).toBeGreaterThan(0);
+    }
   });
   test('pro plans allow all tiers + all features and grant far more credits than free', () => {
     for (const code of ['plus', 'pro', 'max'] as const) {

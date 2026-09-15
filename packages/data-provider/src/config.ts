@@ -1322,7 +1322,6 @@ export type TStartupConfig = {
    * `immediate` = fetch in parallel with the active stream (default);
    * `final` = fetch only after the stream completes (legacy). */
   titleGenerationTiming?: 'immediate' | 'final';
-  anonymousAccessEnabled?: boolean;
   analyticsGtmId?: string;
   bundlerURL?: string;
   staticBundlerURL?: string;
@@ -1582,7 +1581,6 @@ export const configSchema = z.object({
   ocr: ocrSchema.optional(),
   webSearch: webSearchSchema.optional(),
   memory: memorySchema.optional(),
-  anonymousAccess: z.boolean().optional(),
   summarization: summarizationConfigSchema.optional(),
   secureImageLinks: z.boolean().optional(),
   imageOutputType: z.nativeEnum(EImageOutputType).default(EImageOutputType.PNG),

@@ -88,7 +88,6 @@ export const AppService = async (params?: {
   const ocr = loadOCRConfig(config.ocr);
   const webSearch = loadWebSearchConfig(config.webSearch);
   const memory = loadMemoryConfig(config.memory);
-  const anonymousAccess = config.anonymousAccess === true;
   const summarization = loadSummarizationConfig(config);
   const filteredTools = config.filteredTools;
   const includedTools = config.includedTools;
@@ -124,7 +123,6 @@ export const AppService = async (params?: {
     paths,
     config,
     memory,
-    anonymousAccess,
     speech,
     imageGeneration,
     balance,

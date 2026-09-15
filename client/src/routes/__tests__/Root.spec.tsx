@@ -67,7 +67,6 @@ jest.mock('~/Providers', () => ({
   FileMapContext: { Provider: ({ children }: { children: React.ReactNode }) => children },
 }));
 
-jest.mock('~/components/Auth/GuestUpgradeModal', () => () => null);
 jest.mock('~/components/UnifiedSidebar', () => ({
   UnifiedSidebar: () => <div data-testid="unified-sidebar" />,
 }));
