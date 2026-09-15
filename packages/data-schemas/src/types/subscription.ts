@@ -13,9 +13,6 @@ export interface ISubscription extends Document {
   metadata: Record<string, string>;
   created_at: Date;
   updated_at: Date;
-  /** Set only for the anonymous trial, whose owning user is itself TTL-bound.
-   *  Absent on every other row. See `subscriptionSchema`. */
-  expiresAt?: Date;
 }
 
 export interface ISubscriptionLean {
@@ -31,8 +28,5 @@ export interface ISubscriptionLean {
   metadata: Record<string, string>;
   created_at: Date;
   updated_at: Date;
-  /** Set only for the anonymous trial, whose owning user is itself TTL-bound.
-   *  Absent on every other row. See `subscriptionSchema`. */
-  expiresAt?: Date;
   __v?: number;
 }

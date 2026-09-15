@@ -1,11 +1,6 @@
 import debounce from 'lodash/debounce';
 import React, { createContext, useContext, useState, useMemo, useCallback } from 'react';
-import {
-  SystemRoles,
-  EModelEndpoint,
-  isAgentsEndpoint,
-  isAssistantsEndpoint,
-} from 'librechat-data-provider';
+import { EModelEndpoint, isAgentsEndpoint, isAssistantsEndpoint } from 'librechat-data-provider';
 import type * as t from 'librechat-data-provider';
 import type { Endpoint, SelectedValues } from '~/common';
 import {
@@ -97,7 +92,7 @@ export function ModelSelectorProvider({ children, startupConfig }: ModelSelector
     { requiredPermission: permissionLevel },
     {
       select: (data) => data?.data,
-      enabled: !!user && user.role !== SystemRoles.GUEST,
+      enabled: !!user,
     },
   );
 

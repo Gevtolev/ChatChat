@@ -1,12 +1,5 @@
-import { useRecoilValue } from 'recoil';
 import { useQuery, useInfiniteQuery, useQueryClient } from '@tanstack/react-query';
-import {
-  QueryKeys,
-  SystemRoles,
-  dataService,
-  EModelEndpoint,
-  PermissionBits,
-} from 'librechat-data-provider';
+import { QueryKeys, dataService, EModelEndpoint, PermissionBits } from 'librechat-data-provider';
 import type {
   QueryObserverResult,
   UseQueryOptions,
@@ -14,7 +7,6 @@ import type {
 } from '@tanstack/react-query';
 import type t from 'librechat-data-provider';
 import { isEphemeralAgent } from '~/common';
-import store from '~/store';
 
 /**
  * AGENTS
@@ -47,16 +39,14 @@ export const useListAgentsQuery = <TData = t.AgentListResponse>(
   config?: UseQueryOptions<t.AgentListResponse, unknown, TData>,
 ): QueryObserverResult<TData> => {
   const queryClient = useQueryClient();
-  const user = useRecoilValue(store.user);
   const endpointsConfig = queryClient.getQueryData<t.TEndpointsConfig>([QueryKeys.endpoints]);
 
   /**
-   * GUEST (anonymous) accounts are never allowed to list agents (backend 403s this route) —
-   * gated here, not just at call sites, since every `useListAgentsQuery` call shares one cache
+   * Gated here, not just at call sites, since every `useListAgentsQuery` call shares one cache
    * entry per query key: a single unguarded observer would still trigger the fetch for all of
    * them.
    */
-  const enabled = !!endpointsConfig?.[EModelEndpoint.agents] && user?.role !== SystemRoles.GUEST;
+  const enabled = !!endpointsConfig?.[EModelEndpoint.agents];
   return useQuery<t.AgentListResponse, unknown, TData>(
     [QueryKeys.agents, params],
     () => dataService.listAgents(params),

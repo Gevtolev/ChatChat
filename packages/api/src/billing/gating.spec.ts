@@ -106,15 +106,24 @@ describe('checkBillingAccess — model tier gating', () => {
     );
   });
 
+  /** A paid account whose grant never landed has no Balance document. Reading
+   *  that as "unlimited" would hand out the most expensive models for nothing,
+   *  so the gate must treat a missing row as zero. Asserted on a paid plan
+   *  because free is capped by messages and never consults a balance. */
   test('a credit-metered user with no balance row is denied, not given free capacity', async () => {
     expect.assertions(2);
-    /** A `free` user who never went through `applyPlanChange` has no Balance
-     *  document. Reading that as "unlimited" would hand out the most expensive
-     *  models for nothing, so the gate must treat a missing row as zero. */
     const userId = new mongoose.Types.ObjectId();
+    const deps = {
+      ...gatingDeps(),
+      getActiveSubscriptionRecord: async () => ({
+        user_id: userId,
+        plan_code: 'plus',
+        status: 'active',
+      }),
+    } as unknown as Parameters<typeof checkBillingAccess>[1];
 
     await expectDenied(
-      checkBillingAccess({ userId, modelId: 'gpt-5.4-nano' }, gatingDeps()),
+      checkBillingAccess({ userId, modelId: 'gpt-5.4-nano' }, deps),
       'insufficient_credits',
     );
   });
@@ -155,13 +164,15 @@ describe('checkBillingAccess — model tier gating', () => {
       checkBillingAccess({ userId, modelId: 'claude-opus-5' }, deps),
       'upgrade_required_model',
     );
-    /** ...while a cheap one clears that gate and stops at the quota instead,
-     *  this account having no Balance row. Before the fallback both threw a
-     *  TypeError on `plan.code`, indistinguishable from each other and from a
-     *  genuine outage. */
+    /** ...while a cheap one clears that gate and stops at the message cap
+     *  instead. Before the fallback both threw a TypeError on `plan.code`,
+     *  indistinguishable from each other and from a genuine outage. */
+    for (let i = 0; i < 3; i++) {
+      await checkBillingAccess({ userId, modelId: 'gpt-5.4-nano' }, deps);
+    }
     await expectDenied(
       checkBillingAccess({ userId, modelId: 'gpt-5.4-nano' }, deps),
-      'insufficient_credits',
+      'upgrade_required_quota',
     );
   });
 
@@ -292,17 +303,18 @@ describe('checkBillingAccess — DISABLE_BILLING_GATING escape hatch', () => {
     process.env.DISABLE_BILLING_GATING = ORIGINAL_ENV;
   });
 
-  test('free user + expensive model passes when the flag is enabled, quota untouched', async () => {
+  /** The hatch lifts the tier gate — free reaches an expensive model with the
+   *  flag on — but the message cap is still counted, because it is the free
+   *  tier's only limit and a testing flag must not remove it. */
+  test('the flag lifts the tier gate but still counts the message', async () => {
     process.env.DISABLE_BILLING_GATING = 'true';
     const userId = new mongoose.Types.ObjectId();
     const deps = gatingDeps();
 
-    /** Resolves to the plan it applied — `free` here, since the escape hatch
-     *  exempts the user rather than upgrading them. */
     await expect(checkBillingAccess({ userId, modelId: 'gpt-5.5' }, deps)).resolves.toBe('free');
 
-    const quotaRecord = await mongoose.models.Quota.findOne({ user_id: userId }).lean();
-    expect(quotaRecord).toBeNull();
+    const quotaRecord = await mongoose.models.Quota.findOne({ user_id: userId }).lean<IQuotaLean>();
+    expect(quotaRecord?.messages_used).toBe(1);
   });
 
   test('gating re-enabled once the flag is turned back off', async () => {
@@ -316,28 +328,29 @@ describe('checkBillingAccess — DISABLE_BILLING_GATING escape hatch', () => {
     );
   });
 
-  test('anonymous trial stays enforced even when the flag is enabled', async () => {
+  test('the free message cap stays enforced even when the flag is enabled', async () => {
     process.env.DISABLE_BILLING_GATING = 'true';
     const userId = new mongoose.Types.ObjectId();
     await applyPlanChange(
-      { user_id: userId, plan_code: 'anonymous', source: 'system_default' },
+      { user_id: userId, plan_code: 'free', source: 'system_default' },
       buildApplyDeps(),
     );
     const deps = gatingDeps();
 
-    // anonymous plan allows all tiers but caps at 3 lifetime messages — 3 pass, 4th denied,
-    // independent of DISABLE_BILLING_GATING (which still exempts non-anonymous users).
+    // free caps at 3 lifetime messages — 3 pass, 4th denied, independent of
+    // DISABLE_BILLING_GATING. The cap is the free tier's only limit, so a flag
+    // meant for testing must not switch it off.
     await expect(
-      checkBillingAccess({ userId, modelId: 'x-ai/grok-4.3' }, deps),
+      checkBillingAccess({ userId, modelId: 'gpt-5.4-nano' }, deps),
     ).resolves.toBeDefined();
     await expect(
-      checkBillingAccess({ userId, modelId: 'x-ai/grok-4.3' }, deps),
+      checkBillingAccess({ userId, modelId: 'gpt-5.4-nano' }, deps),
     ).resolves.toBeDefined();
     await expect(
-      checkBillingAccess({ userId, modelId: 'x-ai/grok-4.3' }, deps),
+      checkBillingAccess({ userId, modelId: 'gpt-5.4-nano' }, deps),
     ).resolves.toBeDefined();
     await expectDenied(
-      checkBillingAccess({ userId, modelId: 'x-ai/grok-4.3' }, deps),
+      checkBillingAccess({ userId, modelId: 'gpt-5.4-nano' }, deps),
       'upgrade_required_quota',
     );
   });
@@ -390,24 +403,23 @@ describe('checkBillingAccess — payload shape', () => {
 
   test('upgrade_required_quota error includes used and limit', async () => {
     const userId = new mongoose.Types.ObjectId();
-    /** Anonymous is the only message-counted plan, and this payload is only
-     *  ever about messages. A credit-metered plan denies with
-     *  `insufficient_credits` and a credit count — reusing this code told a
-     *  paying customer they had run out of *messages*, quoting their credit
-     *  grant as the number. */
+    /** Free is the only message-counted plan, and this payload is only ever
+     *  about messages. A credit-metered plan denies with `insufficient_credits`
+     *  and a credit count — reusing this code told a paying customer they had
+     *  run out of *messages*, quoting their credit grant as the number. */
     await applyPlanChange(
-      { user_id: userId, plan_code: 'anonymous', source: 'system_default' },
+      { user_id: userId, plan_code: 'free', source: 'system_default' },
       buildApplyDeps(),
     );
     const deps = gatingDeps();
 
     for (let i = 0; i < 3; i++) {
-      await checkBillingAccess({ userId, modelId: 'gpt-5.4-mini' }, deps);
+      await checkBillingAccess({ userId, modelId: 'gpt-5.4-nano' }, deps);
     }
 
     let caughtErr: unknown;
     try {
-      await checkBillingAccess({ userId, modelId: 'gpt-5.4-mini' }, deps);
+      await checkBillingAccess({ userId, modelId: 'gpt-5.4-nano' }, deps);
     } catch (err) {
       caughtErr = err;
     }
@@ -422,81 +434,43 @@ describe('checkBillingAccess — payload shape', () => {
   });
 });
 
-describe('checkBillingAccess — the anonymous trial is not credit-metered', () => {
-  /** The visitor trial is a product rule expressed in messages, so it survives
-   *  the billing escape hatch and never consults a Balance row — an anonymous
-   *  visitor has none. It also must not reset: a lifetime counter, not a period. */
-  test('anonymous is capped at three messages and does not reset', async () => {
+describe('checkBillingAccess — the free tier is capped by messages, not credits', () => {
+  /** The free allowance is a product rule expressed in messages, so it survives
+   *  the billing escape hatch and never consults a Balance row — a free account
+   *  has no grant. It also must not reset: a lifetime counter, not a period. */
+  test('free is capped at three messages and does not reset', async () => {
     expect.assertions(2);
     const userId = new mongoose.Types.ObjectId();
     await applyPlanChange(
-      { user_id: userId, plan_code: 'anonymous', source: 'system_default' },
+      { user_id: userId, plan_code: 'free', source: 'system_default' },
       buildApplyDeps(),
     );
     const deps = gatingDeps();
 
+    /** A cheap model: free reaches that tier and no other, so this exercises
+     *  the message cap rather than stopping at the tier gate. */
     for (let i = 0; i < 3; i++) {
-      await checkBillingAccess({ userId, modelId: 'gpt-5.4-mini' }, deps);
+      await checkBillingAccess({ userId, modelId: 'gpt-5.4-nano' }, deps);
     }
 
     await expectDenied(
-      checkBillingAccess({ userId, modelId: 'gpt-5.4-mini' }, deps),
+      checkBillingAccess({ userId, modelId: 'gpt-5.4-nano' }, deps),
       'upgrade_required_quota',
     );
   });
 
-  test('anonymous never reads a balance', async () => {
+  test('free never reads a balance', async () => {
     const userId = new mongoose.Types.ObjectId();
     await applyPlanChange(
-      { user_id: userId, plan_code: 'anonymous', source: 'system_default' },
+      { user_id: userId, plan_code: 'free', source: 'system_default' },
       buildApplyDeps(),
     );
     const refreshMonthlyGrant = jest.fn();
     await checkBillingAccess(
-      { userId, modelId: 'gpt-5.4-mini' },
+      { userId, modelId: 'gpt-5.4-nano' },
       { ...gatingDeps(), refreshMonthlyGrant },
     );
     expect(refreshMonthlyGrant).not.toHaveBeenCalled();
-  });
-
-  /**
-   * The trial counter belongs to a `User` that MongoDB collects after 7 days,
-   * and TTL does not cascade — so the counter carries its own expiry. Set a day
-   * later than the user's, never earlier: a counter that vanished first would
-   * hand a visitor still inside their trial three more messages.
-   */
-  test('the anonymous counter expires, a day after its user would', async () => {
-    const userId = new mongoose.Types.ObjectId();
-    await applyPlanChange(
-      { user_id: userId, plan_code: 'anonymous', source: 'system_default' },
-      buildApplyDeps(),
-    );
-
-    await checkBillingAccess({ userId, modelId: 'gpt-5.4-mini' }, gatingDeps());
-
-    const row = await mongoose.models.Quota.findOne({ user_id: userId }).lean<IQuotaLean>();
-    const USER_TTL_MS = 7 * 24 * 60 * 60 * 1000;
-    expect(row?.expiresAt).toBeInstanceOf(Date);
-    expect(row!.expiresAt!.getTime()).toBeGreaterThan(Date.now() + USER_TTL_MS);
-  });
-
-  /** `$setOnInsert`, so message two does not push the expiry a day further out
-   *  each time — the trial would then outlive its own user indefinitely. */
-  test('a second message does not extend the counter expiry', async () => {
-    const userId = new mongoose.Types.ObjectId();
-    await applyPlanChange(
-      { user_id: userId, plan_code: 'anonymous', source: 'system_default' },
-      buildApplyDeps(),
-    );
-    const deps = gatingDeps();
-
-    await checkBillingAccess({ userId, modelId: 'gpt-5.4-mini' }, deps);
-    const first = await mongoose.models.Quota.findOne({ user_id: userId }).lean<IQuotaLean>();
-    await checkBillingAccess({ userId, modelId: 'gpt-5.4-mini' }, deps);
-    const second = await mongoose.models.Quota.findOne({ user_id: userId }).lean<IQuotaLean>();
-
-    expect(second!.messages_used).toBe(2);
-    expect(second!.expiresAt!.getTime()).toBe(first!.expiresAt!.getTime());
   });
 });
 

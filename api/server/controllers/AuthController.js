@@ -13,7 +13,7 @@ const AUTH_REFRESH_USER_PROJECTION = '-password -__v -totpSecret -backupCodes -f
 
 const registrationController = async (req, res) => {
   try {
-    const response = await registerUser(req.body, {}, req);
+    const response = await registerUser(req.body, {});
     const { status, message } = response;
     res.status(status).send({ message });
   } catch (err) {

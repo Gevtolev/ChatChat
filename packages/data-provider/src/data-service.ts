@@ -159,10 +159,6 @@ export const login = (payload: t.TLoginUser): Promise<t.TLoginResponse> => {
   return request.post(endpoints.login(), payload);
 };
 
-export const anonymousLogin = (): Promise<t.TLoginResponse> => {
-  return request.post(endpoints.anonymousLogin());
-};
-
 export const logout = (): Promise<m.TLogoutResponse> => {
   return request.post(endpoints.logout());
 };

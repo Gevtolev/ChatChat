@@ -57,7 +57,6 @@ export interface AppConfig {
   /** Memory configuration */
   memory?: TMemoryConfig;
   /** Whether unauthenticated visitors get a silent anonymous account */
-  anonymousAccess?: boolean;
   /** Summarization configuration */
   summarization?: SummarizationConfig;
   /** Web search configuration */

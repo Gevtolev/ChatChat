@@ -16,10 +16,8 @@ const {
 const { verify2FAWithTempToken } = require('~/server/controllers/auth/TwoFactorAuthController');
 const { logoutController } = require('~/server/controllers/auth/LogoutController');
 const { loginController } = require('~/server/controllers/auth/LoginController');
-const { anonymousController } = require('~/server/controllers/auth/AnonymousController');
 const { findBalanceByUser, upsertBalanceFields } = require('~/models');
 const { getAppConfig } = require('~/server/services/Config');
-const optionalJwtAuth = require('~/server/middleware/optionalJwtAuth');
 const middleware = require('~/server/middleware');
 
 const setBalanceConfig = createSetBalanceConfig({
@@ -50,13 +48,6 @@ router.post(
   loginController,
 );
 router.post('/refresh', refreshController);
-router.post(
-  '/anonymous',
-  optionalJwtAuth,
-  middleware.registerLimiter,
-  middleware.checkBan,
-  anonymousController,
-);
 router.post('/cloudfront/refresh', middleware.requireJwtAuth, (req, res) => {
   const result = getCloudFrontAuthCookieRefreshResult(req, res);
   if (!result.enabled) {

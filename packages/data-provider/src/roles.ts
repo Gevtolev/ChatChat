@@ -31,10 +31,6 @@ export enum SystemRoles {
    * The default user role
    */
   USER = 'USER',
-  /**
-   * Silently-created anonymous account role — restricted to chatting only.
-   */
-  GUEST = 'GUEST',
 }
 
 export const roleSchema = z.object({
@@ -118,10 +114,6 @@ const defaultRolesSchema = z.object({
   }),
   [SystemRoles.USER]: roleSchema.extend({
     name: z.literal(SystemRoles.USER),
-    permissions: permissionsSchema,
-  }),
-  [SystemRoles.GUEST]: roleSchema.extend({
-    name: z.literal(SystemRoles.GUEST),
     permissions: permissionsSchema,
   }),
 });
@@ -254,77 +246,6 @@ export const roleDefaults = defaultRolesSchema.parse({
       [PermissionTypes.SKILLS]: {
         [Permissions.USE]: true,
         [Permissions.CREATE]: true,
-        [Permissions.SHARE]: false,
-        [Permissions.SHARE_PUBLIC]: false,
-      },
-    },
-  },
-  [SystemRoles.GUEST]: {
-    name: SystemRoles.GUEST,
-    permissions: {
-      [PermissionTypes.PROMPTS]: {
-        [Permissions.USE]: false,
-        [Permissions.CREATE]: false,
-        [Permissions.SHARE]: false,
-        [Permissions.SHARE_PUBLIC]: false,
-      },
-      [PermissionTypes.BOOKMARKS]: {
-        [Permissions.USE]: false,
-      },
-      [PermissionTypes.MEMORIES]: {
-        [Permissions.USE]: false,
-        [Permissions.CREATE]: false,
-        [Permissions.UPDATE]: false,
-        [Permissions.READ]: false,
-        [Permissions.OPT_OUT]: false,
-      },
-      [PermissionTypes.AGENTS]: {
-        [Permissions.USE]: true,
-        [Permissions.CREATE]: false,
-        [Permissions.SHARE]: false,
-        [Permissions.SHARE_PUBLIC]: false,
-      },
-      [PermissionTypes.MULTI_CONVO]: {
-        [Permissions.USE]: false,
-      },
-      [PermissionTypes.TEMPORARY_CHAT]: {
-        [Permissions.USE]: false,
-      },
-      [PermissionTypes.RUN_CODE]: {
-        [Permissions.USE]: false,
-      },
-      [PermissionTypes.WEB_SEARCH]: {
-        [Permissions.USE]: false,
-      },
-      [PermissionTypes.PEOPLE_PICKER]: {
-        [Permissions.VIEW_USERS]: false,
-        [Permissions.VIEW_GROUPS]: false,
-        [Permissions.VIEW_ROLES]: false,
-      },
-      [PermissionTypes.MARKETPLACE]: {
-        [Permissions.USE]: false,
-      },
-      [PermissionTypes.FILE_SEARCH]: {
-        [Permissions.USE]: false,
-      },
-      [PermissionTypes.FILE_CITATIONS]: {
-        [Permissions.USE]: false,
-      },
-      [PermissionTypes.MCP_SERVERS]: {
-        [Permissions.USE]: false,
-        [Permissions.CREATE]: false,
-        [Permissions.SHARE]: false,
-        [Permissions.SHARE_PUBLIC]: false,
-      },
-      [PermissionTypes.REMOTE_AGENTS]: {
-        [Permissions.USE]: false,
-        [Permissions.CREATE]: false,
-        [Permissions.SHARE]: false,
-        [Permissions.SHARE_PUBLIC]: false,
-      },
-      [PermissionTypes.SKILLS]: {
-        [Permissions.USE]: false,
-        [Permissions.CREATE]: false,
         [Permissions.SHARE]: false,
         [Permissions.SHARE_PUBLIC]: false,
       },

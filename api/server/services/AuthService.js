@@ -39,7 +39,6 @@ const {
   generateRefreshToken,
 } = require('~/models');
 const db = require('~/models');
-const { getPriorAnonymousUserId } = require('./anonymousAccount');
 const { registerSchema } = require('~/strategies/validators');
 const { getAppConfig } = require('~/server/services/Config');
 const { sendEmail } = require('~/server/utils');
@@ -199,7 +198,7 @@ const verifyEmail = async (req) => {
  * @param {Partial<IUser>} [additionalData={}]
  * @returns {Promise<{status: number, message: string, user?: IUser}>}
  */
-const registerUser = async (user, additionalData = {}, req = null) => {
+const registerUser = async (user, additionalData = {}) => {
   const { error } = registerSchema.safeParse(user);
   if (error) {
     const errorMessage = errorsToString(error.errors);
@@ -257,26 +256,13 @@ const registerUser = async (user, additionalData = {}, req = null) => {
     const emailEnabled = checkEmailConfig();
     const disableTTL = isEnabled(process.env.ALLOW_UNVERIFIED_EMAIL_LOGIN);
 
-    /**
-     * Registering while holding a still-valid anonymous session upgrades that SAME account
-     * in place (same `_id`, so its conversations/files need no migration) instead of creating
-     * a brand-new document — `updateUser` already `$unset`s `expiresAt`, converting the
-     * TTL-bound anonymous placeholder into a permanent one, exactly like unverified-email
-     * accounts convert on verification.
-     */
-    const priorAnonymousUserId = req ? await getPriorAnonymousUserId(req) : null;
-    let newUser;
-    if (priorAnonymousUserId) {
-      newUser = await updateUser(priorAnonymousUserId, { ...newUserData, role: SystemRoles.USER });
-    } else {
-      newUser = await createUser(newUserData, appConfig.balance, disableTTL, true);
-    }
+    const newUser = await createUser(newUserData, appConfig.balance, disableTTL, true);
     newUserId = newUser._id;
     /**
-     * Both branches, not just the anonymous upgrade: a plain registration used to
-     * end here with no subscription and no Balance at all, and the gate reads a
-     * missing Balance as zero rather than as unlimited. Every account that skipped
-     * this would be locked out the moment enforcement came on.
+     * A plain registration used to end here with no subscription and no Balance
+     * at all, and the gate reads a missing Balance as zero rather than as
+     * unlimited. Every account that skipped this would be locked out the moment
+     * enforcement came on.
      */
     await applyPlanChange(
       { user_id: newUser._id, plan_code: 'free', source: 'system_default' },

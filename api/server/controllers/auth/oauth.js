@@ -7,10 +7,6 @@ const {
   generateAdminExchangeCode,
 } = require('@librechat/api');
 const { setAuthTokens } = require('~/server/services/AuthService');
-const {
-  getPriorAnonymousUserId,
-  migrateAnonymousData,
-} = require('~/server/services/anonymousAccount');
 const getLogStores = require('~/cache/getLogStores');
 const { checkBan } = require('~/server/middleware');
 const { generateToken } = require('~/models');
@@ -70,17 +66,6 @@ function createOAuthHandler(redirectUri = domains.client) {
 
       /** Standard OAuth flow - set cookies and redirect */
       await setAuthTokens(req.user._id, res, null, req);
-
-      /**
-       * OAuth account resolution (find-or-create by email) never reuses an anonymous
-       * placeholder's `_id`, so unlike registration there's no "convert in place" case here —
-       * only migrate-and-discard the anonymous trial data, same as logging into a pre-existing
-       * account.
-       */
-      const priorAnonymousUserId = await getPriorAnonymousUserId(req);
-      if (priorAnonymousUserId && priorAnonymousUserId !== String(req.user._id)) {
-        await migrateAnonymousData(priorAnonymousUserId, req.user._id);
-      }
 
       res.redirect(redirectUri);
     } catch (err) {

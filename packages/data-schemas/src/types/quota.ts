@@ -6,9 +6,6 @@ export interface IQuota extends Document {
   messages_used: number;
   created_at: Date;
   updated_at: Date;
-  /** Set only for the anonymous trial, whose owning user is itself TTL-bound.
-   *  Absent on every other row. See `quotaSchema`. */
-  expiresAt?: Date;
 }
 
 export interface IQuotaLean {
@@ -18,8 +15,5 @@ export interface IQuotaLean {
   messages_used: number;
   created_at: Date;
   updated_at: Date;
-  /** Set only for the anonymous trial, whose owning user is itself TTL-bound.
-   *  Absent on every other row. See `quotaSchema`. */
-  expiresAt?: Date;
   __v?: number;
 }

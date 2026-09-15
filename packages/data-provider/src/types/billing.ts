@@ -1,5 +1,5 @@
 // packages/data-provider/src/types/billing.ts
-export type PlanCode = 'anonymous' | 'free' | 'trial' | 'plus' | 'pro' | 'max' | 'beta';
+export type PlanCode = 'free' | 'trial' | 'plus' | 'pro' | 'max' | 'beta';
 export type CostTier = 'cheap' | 'mid' | 'expensive';
 export type SubStatus = 'active' | 'trialing' | 'expired' | 'admin_granted';
 export type PlanChangeSource = 'admin' | 'stripe' | 'system_default' | 'cli';
@@ -111,9 +111,8 @@ export interface TEntitlements {
     features: PlanConfig['features'];
   };
   /**
-   * Null for plans that grant no credits — the anonymous tier, capped by
-   * message count instead. Zero would render as an exhausted allowance rather
-   * than an absent one.
+   * Null for plans that grant no credits. Zero would render as an exhausted
+   * allowance rather than an absent one.
    */
   credits: {
     remaining: number;

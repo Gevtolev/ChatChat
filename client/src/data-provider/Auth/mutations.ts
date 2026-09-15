@@ -57,33 +57,6 @@ export const useLoginUserMutation = (
   });
 };
 
-export const useAnonymousLoginMutation = (
-  options?: t.MutationOptions<t.TLoginResponse, undefined, unknown, unknown>,
-): UseMutationResult<t.TLoginResponse, unknown, undefined, unknown> => {
-  const queryClient = useQueryClient();
-  const clearStates = useClearStates();
-  const resetDefaultPreset = useResetRecoilState(store.defaultPreset);
-  const setQueriesEnabled = useSetRecoilState<boolean>(store.queriesEnabled);
-  return useMutation([MutationKeys.anonymousLogin], {
-    mutationFn: () => dataService.anonymousLogin(),
-    ...(options || {}),
-    onMutate: (vars) => {
-      setQueriesEnabled(false);
-      resetDefaultPreset();
-      clearStates();
-      queryClient.removeQueries();
-      options?.onMutate?.(vars);
-    },
-    onSuccess: (...args) => {
-      options?.onSuccess?.(...args);
-    },
-    onError: (...args) => {
-      setQueriesEnabled(true);
-      options?.onError?.(...args);
-    },
-  });
-};
-
 export const useRefreshTokenMutation = (
   options?: t.MutationOptions<t.TRefreshTokenResponse | undefined, undefined, unknown, unknown>,
 ): UseMutationResult<t.TRefreshTokenResponse | undefined, unknown, undefined, unknown> => {

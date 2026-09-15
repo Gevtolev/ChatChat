@@ -163,27 +163,6 @@ describe('GET /api/config', () => {
       expect(response.body.turnstile).toEqual({ siteKey: 'test-key' });
     });
 
-    it('should set anonymousAccessEnabled to false when anonymousAccess is not configured', async () => {
-      mockGetAppConfig.mockResolvedValue(baseAppConfig);
-      const app = createApp(null);
-
-      const response = await request(app).get('/api/config');
-
-      expect(response.body.anonymousAccessEnabled).toBe(false);
-    });
-
-    it('should set anonymousAccessEnabled to true when anonymousAccess is enabled', async () => {
-      mockGetAppConfig.mockResolvedValue({
-        ...baseAppConfig,
-        anonymousAccess: true,
-      });
-      const app = createApp(null);
-
-      const response = await request(app).get('/api/config');
-
-      expect(response.body.anonymousAccessEnabled).toBe(true);
-    });
-
     it('should include only privacyPolicy and termsOfService from interface config', async () => {
       mockGetAppConfig.mockResolvedValue(baseAppConfig);
       const app = createApp(null);

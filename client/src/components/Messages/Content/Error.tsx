@@ -1,5 +1,5 @@
 // file deepcode ignore HardcodedNonCryptoSecret: No hardcoded secrets
-import { ViolationTypes, ErrorTypes, SystemRoles, alternateName } from 'librechat-data-provider';
+import { ViolationTypes, ErrorTypes, alternateName } from 'librechat-data-provider';
 import type { LocalizeFunction } from '~/common';
 import { formatJSON, extractJson, isJson } from '~/utils/json';
 import { useLocalize, useAuthContext } from '~/hooks';
@@ -127,14 +127,9 @@ const errorMessages = {
     const { feature } = json;
     return localize('com_error_feature_not_available', { 0: feature });
   },
-  upgrade_required_quota: (
-    json: TUpgradeRequiredQuota,
-    localize: LocalizeFunction,
-    role?: string,
-  ) => {
-    if (role === SystemRoles.GUEST) {
-      return localize('com_error_upgrade_required_quota_guest');
-    }
+  /** The free tier's message cap. Only free is counted in messages, so this is
+   *  always the upgrade moment rather than a periodic reset. */
+  upgrade_required_quota: (json: TUpgradeRequiredQuota, localize: LocalizeFunction) => {
     const { limit } = json;
     return localize('com_error_upgrade_required_quota', { 0: String(limit) });
   },

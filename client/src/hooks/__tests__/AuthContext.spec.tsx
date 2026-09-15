@@ -37,11 +37,10 @@ let mockCapturedLogoutOptions: {
 };
 
 const mockRefreshMutate = jest.fn();
-const mockAnonymousLoginMutate = jest.fn();
 const mockGetStartupConfig = jest.fn<
-  { data: { anonymousAccessEnabled: boolean } | undefined; isLoading: boolean },
+  { data: Record<string, unknown> | undefined; isLoading: boolean },
   []
->(() => ({ data: { anonymousAccessEnabled: false }, isLoading: false }));
+>(() => ({ data: {}, isLoading: false }));
 
 jest.mock('~/data-provider', () => ({
   useLoginUserMutation: jest.fn(
@@ -63,7 +62,6 @@ jest.mock('~/data-provider', () => ({
     },
   ),
   useRefreshTokenMutation: jest.fn(() => ({ mutate: mockRefreshMutate })),
-  useAnonymousLoginMutation: jest.fn(() => ({ mutate: mockAnonymousLoginMutate })),
   useGetUserQuery: jest.fn(() => ({
     data: undefined,
     isError: false,
@@ -76,7 +74,7 @@ jest.mock('~/data-provider', () => ({
 
 afterEach(() => {
   mockGetStartupConfig.mockReturnValue({
-    data: { anonymousAccessEnabled: false },
+    data: {},
     isLoading: false,
   });
 });
@@ -376,7 +374,7 @@ describe('AuthContextProvider — silentRefresh post-login redirect', () => {
   });
 });
 
-describe('AuthContextProvider — anonymous session bootstrap', () => {
+describe('AuthContextProvider — an expired session redirects to login', () => {
   beforeEach(() => {
     jest.clearAllMocks();
   });
@@ -385,116 +383,11 @@ describe('AuthContextProvider — anonymous session bootstrap', () => {
     window.history.replaceState({}, '', '/');
   });
 
-  it('bootstraps an anonymous session instead of redirecting when anonymousAccessEnabled and refresh returns no token', () => {
-    mockGetStartupConfig.mockReturnValue({
-      data: { anonymousAccessEnabled: true },
-      isLoading: false,
-    });
-    window.history.replaceState({}, '', '/');
-    renderProviderLive();
-
-    const [, refreshOptions] = mockRefreshMutate.mock.calls[0] as [
-      unknown,
-      { onSuccess: (data: unknown) => void },
-    ];
-
-    act(() => {
-      refreshOptions.onSuccess({ user: undefined, token: '' });
-    });
-
-    expect(mockNavigate).not.toHaveBeenCalled();
-    expect(mockAnonymousLoginMutate).toHaveBeenCalledTimes(1);
-  });
-
-  it('bootstraps an anonymous session instead of redirecting after a refresh error when anonymousAccessEnabled', () => {
-    mockGetStartupConfig.mockReturnValue({
-      data: { anonymousAccessEnabled: true },
-      isLoading: false,
-    });
-    window.history.replaceState({}, '', '/c/new');
-    renderProviderLive();
-
-    const [, refreshOptions] = mockRefreshMutate.mock.calls[0] as [
-      unknown,
-      { onError: (error: unknown) => void },
-    ];
-
-    act(() => {
-      refreshOptions.onError(new Error('refresh failed'));
-    });
-
-    expect(mockNavigate).not.toHaveBeenCalled();
-    expect(mockAnonymousLoginMutate).toHaveBeenCalledTimes(1);
-  });
-
-  it('becomes authenticated once the anonymous bootstrap call succeeds', () => {
-    jest.useFakeTimers();
-    mockGetStartupConfig.mockReturnValue({
-      data: { anonymousAccessEnabled: true },
-      isLoading: false,
-    });
-    window.history.replaceState({}, '', '/');
-    const { getByTestId } = renderProviderLive();
-
-    const [, refreshOptions] = mockRefreshMutate.mock.calls[0] as [
-      unknown,
-      { onSuccess: (data: unknown) => void },
-    ];
-    act(() => {
-      refreshOptions.onSuccess({ user: undefined, token: '' });
-    });
-
-    const [, anonymousOptions] = mockAnonymousLoginMutate.mock.calls[0] as [
-      unknown,
-      { onSuccess: (data: unknown) => void },
-    ];
-    act(() => {
-      anonymousOptions.onSuccess({ user: { id: 'anon-1', role: 'GUEST' }, token: 'anon-token' });
-    });
-    act(() => {
-      jest.advanceTimersByTime(100);
-    });
-
-    expect(getByTestId('consumer').getAttribute('data-authenticated')).toBe('true');
-    // No explicit redirect target was passed — the visitor stays on the current page.
-    expect(mockNavigate).not.toHaveBeenCalled();
-    jest.useRealTimers();
-  });
-
-  it('redirects to /login if the anonymous bootstrap call itself fails', () => {
-    mockGetStartupConfig.mockReturnValue({
-      data: { anonymousAccessEnabled: true },
-      isLoading: false,
-    });
-    window.history.replaceState({}, '', '/');
-    renderProviderLive();
-
-    const [, refreshOptions] = mockRefreshMutate.mock.calls[0] as [
-      unknown,
-      { onSuccess: (data: unknown) => void },
-    ];
-    act(() => {
-      refreshOptions.onSuccess({ user: undefined, token: '' });
-    });
-
-    const [, anonymousOptions] = mockAnonymousLoginMutate.mock.calls[0] as [
-      unknown,
-      { onError: (error: unknown) => void },
-    ];
-    act(() => {
-      anonymousOptions.onError(new Error('bootstrap failed'));
-    });
-
-    expect(mockNavigate).toHaveBeenCalledTimes(1);
-  });
-
   /**
-   * Regression test: anonymousAccessEnabled defaults to false/unconfigured (the
-   * production default). Without gating on this flag, an unauthenticated visit
-   * never redirects to `/login` AND has nothing else rendered in its place —
-   * the user sees a permanent blank page.
+   * The only path now: chatting requires an account, so a visitor with no valid
+   * session goes to the login page. There is no silent account to fall back on.
    */
-  it('still redirects to /login on / when anonymousAccessEnabled is false (default)', () => {
+  it('redirects to /login when the refresh returns no token', () => {
     window.history.replaceState({}, '', '/');
     renderProviderLive();
 
@@ -508,7 +401,24 @@ describe('AuthContextProvider — anonymous session bootstrap', () => {
     });
 
     expect(mockNavigate).toHaveBeenCalledTimes(1);
-    expect(mockAnonymousLoginMutate).not.toHaveBeenCalled();
+    expect(mockNavigate.mock.calls[0][0]).toContain('/login');
+  });
+
+  it('redirects to /login when the refresh itself errors', () => {
+    window.history.replaceState({}, '', '/');
+    renderProviderLive();
+
+    const [, refreshOptions] = mockRefreshMutate.mock.calls[0] as [
+      unknown,
+      { onError: () => void },
+    ];
+
+    act(() => {
+      refreshOptions.onError();
+    });
+
+    expect(mockNavigate).toHaveBeenCalledTimes(1);
+    expect(mockNavigate.mock.calls[0][0]).toContain('/login');
   });
 });
 
@@ -551,7 +461,7 @@ describe('AuthContextProvider — silentRefresh fires exactly once (no removeQue
 
     expect(mockRefreshMutate).not.toHaveBeenCalled();
 
-    mockGetStartupConfig.mockReturnValue({ data: { anonymousAccessEnabled: true }, isLoading: false });
+    mockGetStartupConfig.mockReturnValue({ data: {}, isLoading: false });
     act(() => {
       rerenderTree();
     });
@@ -565,7 +475,7 @@ describe('AuthContextProvider — silentRefresh fires exactly once (no removeQue
     expect(mockRefreshMutate).toHaveBeenCalledTimes(1);
 
     // Simulate the wiped query refetching and resolving again.
-    mockGetStartupConfig.mockReturnValue({ data: { anonymousAccessEnabled: true }, isLoading: false });
+    mockGetStartupConfig.mockReturnValue({ data: {}, isLoading: false });
     act(() => {
       rerenderTree();
     });
@@ -754,31 +664,6 @@ describe('AuthContextProvider — custom role detection and fetching', () => {
     for (const call of sentinelCalls) {
       expect(call[1]).toEqual(expect.objectContaining({ enabled: false }));
     }
-
-    jest.useRealTimers();
-  });
-
-  it('calls useGetRole with enabled: true for GUEST role users (anonymous accounts)', () => {
-    jest.useFakeTimers();
-
-    renderProviderLive();
-
-    const [, refreshOptions] = mockRefreshMutate.mock.calls[0] as [
-      unknown,
-      { onSuccess: (data: unknown) => void },
-    ];
-
-    act(() => {
-      refreshOptions.onSuccess({ user: { id: '1', role: 'GUEST' }, token: 'tok' });
-    });
-    act(() => {
-      jest.advanceTimersByTime(100);
-    });
-
-    const guestCalls = mockUseGetRole.mock.calls.filter(([name]: [string]) => name === 'GUEST');
-    expect(guestCalls.length).toBeGreaterThan(0);
-    const lastGuestCall = guestCalls[guestCalls.length - 1];
-    expect(lastGuestCall[1]).toEqual(expect.objectContaining({ enabled: true }));
 
     jest.useRealTimers();
   });

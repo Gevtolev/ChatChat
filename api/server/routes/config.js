@@ -195,7 +195,6 @@ router.get('/', async function (req, res) {
         ...preLoginPayload,
         socialLogins: baseConfig?.registration?.socialLogins ?? defaultSocialLogins,
         turnstile: baseConfig?.turnstileConfig,
-        anonymousAccessEnabled: baseConfig?.anonymousAccess === true,
         modelSpecs: sanitizeModelSpecs(excludeHiddenModelSpecs(baseConfig?.modelSpecs)),
       };
 

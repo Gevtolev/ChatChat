@@ -10,7 +10,6 @@ const accessResources = require('./accessResources');
 const abortMiddleware = require('./abortMiddleware');
 const checkInviteUser = require('./checkInviteUser');
 const requireJwtAuth = require('./requireJwtAuth');
-const denyGuestRole = require('./denyGuestRole');
 const configMiddleware = require('./config/app');
 const validateModel = require('./validateModel');
 const moderateText = require('./moderateText');
@@ -37,7 +36,6 @@ module.exports = {
   moderateText,
   validateModel,
   requireJwtAuth,
-  denyGuestRole,
   setTwoFactorTempUser,
   checkInviteUser,
   requireLocalAuth,

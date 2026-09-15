@@ -3,7 +3,7 @@ import { CREDIT_DISPLAY_DIVISOR } from 'librechat-data-provider';
 import type { PlanCode } from 'librechat-data-provider';
 import type { Types } from 'mongoose';
 import type { ISubscriptionLean, IQuotaLean } from '@librechat/data-schemas';
-import { getActiveSubscription, anonymousRecordExpiry } from './applyPlanChange';
+import { getActiveSubscription } from './applyPlanChange';
 import { isEnabled } from '~/utils';
 import { PLANS } from './plans';
 import { analytics } from '~/analytics';
@@ -30,19 +30,16 @@ export interface GatingDeps {
     inputTokenCount?: number;
     endpointTokenConfig?: Record<string, Record<string, number>> | null;
   }) => number;
-  /** Only used for `lifetime_message_limit` (the anonymous trial). Credit-metered
+  /** Only used for `lifetime_message_limit` (the free tier). Credit-metered
    *  plans never touch it. */
   incrementQuota: (args: {
     userId: Types.ObjectId;
     periodStart: Date;
     limit: number;
-    /** Only the anonymous plan sets this; the counter is then collected by
-     *  MongoDB alongside the TTL-bound user it belongs to. */
-    expiresAt?: Date;
   }) => Promise<IQuotaLean | null>;
 }
 
-/** Fixed `period_start` for the never-resetting anonymous trial counter. */
+/** Fixed `period_start` for the never-resetting free-tier counter. */
 const LIFETIME_EPOCH = new Date(0);
 
 /**
@@ -98,44 +95,50 @@ export async function checkBillingAccess(
     );
   }
 
-  /** Testing-phase escape hatch — flip DISABLE_BILLING_GATING off (or unset) to
-   *  re-enable tier/quota enforcement before real launch. The anonymous free-trial
-   *  cap is always enforced (independent of this flag) so unauthenticated visitors
-   *  stay limited to their trial even while gating is otherwise disabled. */
-  if (plan.code !== 'anonymous' && isEnabled(process.env.DISABLE_BILLING_GATING)) {
-    return plan.code;
+  /**
+   * Testing-phase escape hatch. It exempts tier, feature and credit
+   * enforcement — but never the free tier's message cap, which is checked
+   * below regardless.
+   *
+   * That asymmetry is the point: the cap is the free tier's *only* limit, so a
+   * flag meant for testing would otherwise turn every free account into
+   * unmetered access. Everything else it switches off is recoverable; that one
+   * is not.
+   */
+  const bypassEnforcement = isEnabled(process.env.DISABLE_BILLING_GATING);
+
+  if (!bypassEnforcement) {
+    const tier = getModelTier(args.modelId);
+
+    if (!plan.allowed_cost_tiers.includes(tier)) {
+      throw new Error(
+        JSON.stringify({
+          code: 'upgrade_required_model',
+          current_plan: plan.code,
+          required_tier: tier,
+        }),
+      );
+    }
+
+    if (args.featureFlag !== undefined && !plan.features[args.featureFlag]) {
+      throw new Error(JSON.stringify({ code: 'feature_not_available', feature: args.featureFlag }));
+    }
   }
 
-  const tier = getModelTier(args.modelId);
-
-  if (!plan.allowed_cost_tiers.includes(tier)) {
-    throw new Error(
-      JSON.stringify({
-        code: 'upgrade_required_model',
-        current_plan: plan.code,
-        required_tier: tier,
-      }),
-    );
-  }
-
-  if (args.featureFlag !== undefined && !plan.features[args.featureFlag]) {
-    throw new Error(JSON.stringify({ code: 'feature_not_available', feature: args.featureFlag }));
-  }
-
-  /** A message-count cap is a product rule, not a billing allowance: the
-   *  anonymous visitor trial must hold even with billing gating disabled, and
-   *  an anonymous visitor has no Balance row to draw against. Counted here,
-   *  atomically, exactly as before. */
+  /** A message-count cap is a product rule, not a billing allowance: the free
+   *  tier is measured in messages people can understand rather than in credits
+   *  they cannot, and it holds even with billing gating disabled. Counted
+   *  atomically so concurrent requests cannot overrun it. */
   if (plan.lifetime_message_limit > 0) {
     const q = await deps.incrementQuota({
       userId,
       periodStart: LIFETIME_EPOCH,
       limit: plan.lifetime_message_limit,
-      expiresAt: anonymousRecordExpiry(plan.code),
     });
     if (q === null) {
-      /** The trial cap, not a paid allowance — the two are separate product
-       *  decisions and the funnel needs to tell them apart. */
+      /** The free tier's message cap, not a spent paid allowance — the two are
+       *  separate product decisions and the upgrade funnel needs to tell them
+       *  apart. This one *is* the conversion moment. */
       analytics.quotaExhausted(String(userId), {
         plan: plan.code,
         limit_type: 'trial_messages',
@@ -148,6 +151,10 @@ export async function checkBillingAccess(
         }),
       );
     }
+  }
+
+  if (bypassEnforcement) {
+    return plan.code;
   }
 
   /** Plans that grant credits are metered by balance. A missing Balance row
@@ -197,7 +204,7 @@ export async function checkBillingAccess(
     if (credits <= 0 || credits < estimatedCost) {
       /**
        * Its own code rather than `upgrade_required_quota`, which is a *message*
-       * count — the anonymous trial's, and the only thing its wording fits.
+       * count — the free tier's, and the only thing its wording fits.
        * Reusing it here told a paying customer they had "reached your quota of
        * 14950000 messages", a sentence that is wrong about the unit, the number
        * and, when the balance merely cannot cover one large prompt, the fact.
